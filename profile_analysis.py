@@ -191,6 +191,8 @@ app = QtWidgets.QApplication([])
 current_dir = os.path.dirname(os.path.realpath(__file__))
 h5_path = os.path.join(current_dir, "source_data/aligned.h5")
 
+print(current_dir, h5_path)
+
 with h5py.File(h5_path, "r") as f:
     reference_grid = f["scan1"][:]
     adjusted_grid = f["scan2"][:]
