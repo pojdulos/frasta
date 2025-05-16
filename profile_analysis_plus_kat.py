@@ -280,6 +280,11 @@ class ProfilViewer(QtWidgets.QMainWindow):
                 vb.addItem(line_adj, ignoreBounds=True)
                 self.annotations.append(line_adj)
                 self.mytest.append(line_adj)
+            else:
+                vb = self.plot_widget.getPlotItem().vb
+                for item in self.mytest:
+                    vb.removeItem(item)
+                self.mytest.clear()    
 
 
 app = QtWidgets.QApplication([])
