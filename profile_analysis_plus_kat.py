@@ -286,14 +286,20 @@ class ProfilViewer(QtWidgets.QMainWindow):
                     vb.removeItem(item)
                 self.mytest.clear()    
 
+def resource_path(relative_path):
+    """Zwraca absolutną ścieżkę do zasobu (działa i w exe, i w .py)"""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
 
 app = QtWidgets.QApplication([])
 
 # Wczytanie danych z pliku HDF5
-current_dir = os.path.dirname(os.path.realpath(__file__))
-h5_path = os.path.join(current_dir, "source_data/aligned.h5")
+# current_dir = os.path.dirname(os.path.realpath(__file__))
+# h5_path = os.path.join(current_dir, "data/aligned.h5")
 
-print(current_dir, h5_path)
+h5_path = resource_path("source_data/aligned.h5")
 
 with h5py.File(h5_path, "r") as f:
     reference_grid = f["scan1"][:]
