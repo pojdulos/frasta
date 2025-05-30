@@ -5,6 +5,52 @@ from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 from skimage.segmentation import flood
 from scipy.interpolate import griddata
+import trimesh
+
+def grid_to_mesh_vectorized(grid, pixel_size_x=1.0, pixel_size_y=1.0):
+    h, w = grid.shape
+
+    # Siatka XY
+    y_indices, x_indices = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+    x_coords = x_indices * pixel_size_x
+    y_coords = y_indices * pixel_size_y
+    z_coords = grid
+
+    # Wszystkie wierzchołki
+    vertices = np.stack([x_coords, y_coords, z_coords], axis=-1).reshape(-1, 3)
+
+    # Maska ważnych punktów (nie NaN)
+    valid_mask = ~np.isnan(vertices[:, 2])
+    index_map = -np.ones(h * w, dtype=int)
+    index_map[valid_mask] = np.arange(np.count_nonzero(valid_mask))
+
+    # Indeksy trójkątów
+    idx_tl = np.ravel_multi_index((np.arange(h - 1)[:, None], np.arange(w - 1)[None, :]), dims=(h, w))
+    idx_tr = idx_tl + 1
+    idx_bl = idx_tl + w
+    idx_br = idx_bl + 1
+
+    # Spłaszczone i połączone
+    idx_tl = idx_tl.ravel()
+    idx_tr = idx_tr.ravel()
+    idx_bl = idx_bl.ravel()
+    idx_br = idx_br.ravel()
+
+    # Tylko tam, gdzie wszystkie 4 są ważne
+    valid_quad = (index_map[idx_tl] >= 0) & (index_map[idx_tr] >= 0) & \
+                 (index_map[idx_bl] >= 0) & (index_map[idx_br] >= 0)
+
+    # Dwa trójkąty na każdy kwadrat
+    faces_a = np.stack([index_map[idx_tl], index_map[idx_tr], index_map[idx_br]], axis=1)[valid_quad]
+    faces_b = np.stack([index_map[idx_tl], index_map[idx_br], index_map[idx_bl]], axis=1)[valid_quad]
+    faces = np.vstack([faces_a, faces_b])
+
+    # Przefiltrowane wierzchołki
+    vertices = vertices[valid_mask]
+
+    return vertices.astype(np.float32), faces.astype(np.int32)
+
+
 
 class GridWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
@@ -97,16 +143,26 @@ class ScanTab(QtWidgets.QWidget):
             self.orig_data = None
         self.update_image()
 
+    def save_as_mesh(self, grid, px_x=1.38, px_y=1.38):
+        v, f = grid_to_mesh_vectorized(grid, px_x, px_y)
+        mesh = trimesh.Trimesh(vertices=v, faces=f, process=False)
+        mesh.export("mesh_output.obj")
+
+
     def save_file(self, parent=None):
         if self.grid is None:
             return
-        fname, _ = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz)")
+        fname, nn = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz);OBJ (*.obj)")
+        print(nn)
         if fname:
-            to_save = dict(grid=self.grid, xi=self.xi, yi=self.yi, px_x=self.px_x, px_y=self.px_y)
-            if self.orig_data:
-                x, y, z = self.orig_data
-                to_save.update(x_data=x, y_data=y, z_data=z)
-            np.savez(fname, **to_save)
+            if fname.endswith(".npz"):
+                to_save = dict(grid=self.grid, xi=self.xi, yi=self.yi, px_x=self.px_x, px_y=self.px_y)
+                if self.orig_data:
+                    x, y, z = self.orig_data
+                    to_save.update(x_data=x, y_data=y, z_data=z)
+                np.savez(fname, **to_save)
+            elif fname.endswith(".obj"):
+                self.save_as_mesh(self.grid)
 
     def flip_scan(self, parent=None):
         if self.grid is None:

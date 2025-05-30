@@ -126,6 +126,12 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.image_view = create_image_view()
         self.image_view.setMinimumWidth(400)
         right_layout.addWidget(self.image_view)
+        vb = self.image_view.getView()
+        vb.setRange(
+            xRange=(0, 1000),
+            # yRange=(0, self.reference_grid.shape[0]-1),
+            padding=0
+        )
         self.image_view.getView().sigRangeChanged.connect(self.on_range_changed)
 
         sep_layout = QtWidgets.QHBoxLayout()
@@ -202,6 +208,7 @@ class ProfilViewer(QtWidgets.QMainWindow):
 
     def on_range_changed(self, viewbox, ranges):
         x_range, y_range = viewbox.viewRange()
+        print(f"Ranges: {ranges}")
         print(f"Nowy zakres X: {x_range}, Y: {y_range}")
 
     def toggle_tilt(self, state):
@@ -267,9 +274,48 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.x2, self.y2 = width - 1, height - 1  
 
         self.redraw_roi()
-        self.update_plot()
+        
+        shape = self.update_plot()
+
+        self.resize_image_view(shape)
+
+        # aspect = shape[0]/shape[1]
+        # div = (shape[1] // 500) if (aspect <= 1.0) else (aspect*shape[1] // 500)
+        # self.image_view.setFixedSize(shape[1]//div,shape[0]//div)
+        # self.image_view.update()
+        # self.updateGeometry()
+
+        vb = self.image_view.getView()
+        vb.setAspectLocked(True)
+
+        vb.setLimits( 
+            yMin=0, yMax=shape[0]-1,
+            xMin=0, xMax=shape[1]-1 
+        )
+        
+        vb.setRange(
+            xRange=(0, shape[1]-1),
+            yRange=(0, shape[0]-1),
+            padding=0
+        )
 
         QtWidgets.QApplication.restoreOverrideCursor()
+
+    def resize_image_view(self, shape):
+        # shape = (height, width)
+        height, width = shape
+        aspect = width / height
+        # bazowy wymiar, np. 700
+        base = 500
+        if aspect >= 1.0:
+            w = base
+            h = int(base / aspect)
+        else:
+            h = base
+            w = int(base * aspect)
+        self.image_view.setFixedSize(w, h)
+        self.image_view.update()
+        self.updateGeometry()
 
     def on_worker_error(self, msg):
         self.progress_bar.setVisible(False)
@@ -283,9 +329,12 @@ class ProfilViewer(QtWidgets.QMainWindow):
         valid_mask = ~np.isnan(self.reference_grid_smooth) & ~np.isnan(self.adjusted_grid_corrected)
         difference = self.reference_grid_smooth - (self.adjusted_grid_corrected + self.separation)
         binary_contact = (difference <= 0) & valid_mask
-        self.image_view.setImage(binary_contact.T, autoLevels=True)
+
+        self.image_view.setImage(binary_contact.T, autoRange=False, autoLevels=True)
 
         self.update_profile_from_roi()
+
+        return binary_contact.shape
 
     def redraw_roi(self):
         if hasattr(self, 'line_roi'):
