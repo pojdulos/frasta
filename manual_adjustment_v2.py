@@ -213,12 +213,12 @@ class OverlayViewer(QtWidgets.QWidget):
 
 
 
-data = np.load("source_data/scan1_interp.npz")
+data = np.load("source_data/moj_test_A_int.npz")
 scan1 = data['grid']
 # x1 = data['x_unique']
 # y1 = data['y_unique']
 
-data = np.load("source_data/scan2_interp.npz")
+data = np.load("source_data/moj_test_B_int.npz")
 scan2 = data['grid']
 # x2 = data['x_unique']
 # y2 = data['y_unique']
@@ -229,8 +229,8 @@ scan2 = data['grid']
 s1 = scan1 #np.where(np.isnan(scan1), np.nanmin(scan1), scan1)
 s2 = scan2 # np.where(np.isnan(scan2), np.nanmax(scan2), scan2)
 
-s2 = np.flipud(s2)
-s2 = -s2
+# s2 = np.flipud(s2)
+# s2 = -s2
 
 # Normalizacja
 #scan1 = (scan1 - scan1.min()) / (scan1.max() - scan1.min())

@@ -152,7 +152,7 @@ class ScanTab(QtWidgets.QWidget):
     def save_file(self, parent=None):
         if self.grid is None:
             return
-        fname, nn = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz);OBJ (*.obj)")
+        fname, nn = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz)")
         print(nn)
         if fname:
             if fname.endswith(".npz"):
@@ -168,13 +168,14 @@ class ScanTab(QtWidgets.QWidget):
         if self.grid is None:
             QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
             return
-        self.grid = np.flipud(self.grid)
+#        self.grid = np.flipud(self.grid)
+        self.grid = np.fliplr(self.grid)
         self.grid = -self.grid
         self.update_image()
 
     def fill_holes(self, parent=None):
-        if self.grid is None or not self.seed_points:
-            QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid and select at least one seed point.")
+        if self.grid is None: #or not self.seed_points:
+            QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
             return
 
         tst = np.isnan(self.grid)
@@ -250,13 +251,13 @@ class MainWindow(QtWidgets.QMainWindow):
         return tab
 
     def open_file(self):
-        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open file", "", "CSV, NPY, NPZ (*.csv *.npy *.npz)")
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open file", "", "CSV, NPY, NPZ (*.csv *.dat *.npy *.npz)")
         if not fname:
             return
         tab = ScanTab()
         self.tabs.addTab(tab, fname.split('/')[-1])
         self.tabs.setCurrentWidget(tab)
-        if fname.endswith('.csv'):
+        if fname.endswith('.csv') or fname.endswith('.dat'):
             dlg = QtWidgets.QProgressDialog("Wczytywanie i gridowanie...", None, 0, 100, self)
             dlg.setWindowModality(QtCore.Qt.ApplicationModal)
             dlg.setAutoClose(True)
