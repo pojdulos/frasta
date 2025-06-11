@@ -11,6 +11,43 @@ from PyQt5.QtCore import QPointF
 from math import atan, degrees
 import pyqtgraph.opengl as gl
 
+from profile3DWindow import Profile3DWindow
+from pixelSnapViewBox import SnapImageWidget
+
+def compute_offset_in_center(reference, target, window_size=100):
+    # Rozmiary obrazów
+    rows, cols = reference.shape
+    # Środek
+    center_row = rows // 2
+    center_col = cols // 2
+    half = window_size // 2
+    # Wytnij okno centralne
+    ref_central = reference[center_row-half:center_row+half, center_col-half:center_col+half]
+    target_central = target[center_row-half:center_row+half, center_col-half:center_col+half]
+    # Maska: tylko tam, gdzie oba są nie NaN
+    mask = ~np.isnan(ref_central) & ~np.isnan(target_central)
+    diff = ref_central - target_central
+    masked_diff = diff[mask]
+    if masked_diff.size == 0:
+        raise ValueError("Brak ważnych danych w centralnym oknie")
+    offset = np.mean(masked_diff)
+    print(f'Offset w centralnym obszarze {window_size}x{window_size}: {offset:.2f}')
+    return offset
+
+def remove_relative_offset(reference, target, mask):
+    offset = compute_offset_in_center(reference, target, window_size=1000)
+    return target + offset
+
+# def remove_relative_offset(reference, target, mask):
+#     #mask = ~np.isnan(reference) & ~np.isnan(target)
+#     difference = reference - target
+#     masked_diff = difference[mask]
+#     if masked_diff.size == 0:
+#         raise ValueError("Brak ważnych danych do obliczenia offsetu")
+#     offset = np.mean(masked_diff)
+#     print('Wyznaczony offset:', offset)
+#     return target + offset
+
 def remove_relative_tilt(reference, target, mask):
     difference = reference - target
     rows, cols = difference.shape
@@ -27,6 +64,8 @@ def remove_relative_tilt(reference, target, mask):
     tilt_plane = model.predict(np.vstack((X.flatten(), Y.flatten())).T).reshape(difference.shape)
     return target + tilt_plane
 
+
+
 def create_image_view():
     view = pg.ImageView()
     view.ui.histogram.hide()
@@ -40,164 +79,6 @@ def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
-
-
-class Profile3DWindow(QtWidgets.QWidget):
-    def __init__(self, reference_grid, adjusted_grid, line_points=None, separation=0, auto_center_z=True, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("3D View of Grids and Profile Plane")
-        self.resize(900, 700)
-        layout = QtWidgets.QVBoxLayout(self)
-
-        # ---- Panel z checkboxami ----
-        ctrl_layout = QtWidgets.QHBoxLayout()
-        self.checkbox_ref = QtWidgets.QCheckBox("Show Reference Surface")
-        self.checkbox_ref.setChecked(True)
-        self.checkbox_adj = QtWidgets.QCheckBox("Show Adjusted Surface")
-        self.checkbox_adj.setChecked(True)
-        self.checkbox_line = QtWidgets.QCheckBox("Show Profile Line")
-        self.checkbox_line.setChecked(True)
-        self.checkbox_plane = QtWidgets.QCheckBox("Show Section Plane")
-        self.checkbox_plane.setChecked(True)
-        ctrl_layout.addWidget(self.checkbox_ref)
-        ctrl_layout.addWidget(self.checkbox_adj)
-        ctrl_layout.addWidget(self.checkbox_line)
-        ctrl_layout.addWidget(self.checkbox_plane)
-        layout.addLayout(ctrl_layout)
-        # ---- Koniec panelu ----
-
-        self.view = gl.GLViewWidget()
-        layout.addWidget(self.view)
-        self.view.setCameraPosition(distance=200)
-
-        # Przechowywane referencje do elementów
-        self.surface_ref_item = None
-        self.surface_adj_item = None
-        self.ref_profile_line_item = None
-        self.adj_profile_line_item = None
-        self.cross_plane_item = None
-
-
-        #step = max(1, min(reference_grid.shape[0], reference_grid.shape[1]) // 512)
-        step = 5
-
-        print(f"step={step}")        
-        ys = np.arange(0, reference_grid.shape[0], step)
-        xs = np.arange(0, reference_grid.shape[1], step)
-        Z_ref = reference_grid[np.ix_(ys, xs)]
-        Z_adj = adjusted_grid[np.ix_(ys, xs)] + separation
-
-        print(f"Zref: {Z_ref.shape}, Zadj: {Z_adj.shape}")
-
-        Z_MAX = 1e6
-        Z_MIN = -1e6
-
-        # Zamień niepoprawne na NaN
-        Z_ref = np.where(np.isfinite(Z_ref), Z_ref, np.nan)
-        Z_adj = np.where(np.isfinite(Z_adj), Z_adj, np.nan)
-
-        # Zamień punkty spoza zakresu na NaN (nie będą rysowane)
-        # Z_ref = np.where((Z_ref > Z_MAX) | (Z_ref < Z_MIN), np.nan, Z_ref)
-        # Z_adj = np.where((Z_adj > Z_MAX) | (Z_adj < Z_MIN), np.nan, Z_adj)
-        Z_ref = np.where((Z_ref > Z_MAX) | (Z_ref < Z_MIN), 0.0, Z_ref)
-        Z_adj = np.where((Z_adj > Z_MAX) | (Z_adj < Z_MIN), 0.0, Z_adj)
-
-        Z_ref = Z_ref / 1000.0  # teraz Z w mm, jeśli wcześniej było w μm
-        Z_adj = Z_adj / 1000.0
-
-        # Jeśli cała siatka NaN, NIE rysuj jej!
-        if not np.all(np.isnan(Z_ref)):
-            self.surface_ref_item = gl.GLSurfacePlotItem(
-                x=xs, y=ys, z=Z_ref.T, color=(0,1,0,1), shader='shaded'
-            )
-            self.view.addItem(self.surface_ref_item)
-
-        if not np.all(np.isnan(Z_adj)):
-            self.surface_adj_item = gl.GLSurfacePlotItem(
-                x=xs, y=ys, z=Z_adj.T, color=(0.2,0.3,1,1), shader='shaded'
-            )
-            self.view.addItem(self.surface_adj_item)
-
-        z_min = min(np.nanmin(Z_ref), np.nanmin(Z_adj))
-        z_max = max(np.nanmax(Z_ref), np.nanmax(Z_adj))
-        self.cross_plane_item = self.add_cross_section_plane(line_points, z_min, z_max)
-
-        # Dodaj linię profilu
-        if line_points is not None and len(line_points) > 1:
-            pts = np.array(line_points)
-            ref_prof = reference_grid[pts[:,1], pts[:,0]]
-            ref_prof = ref_prof / 1000.0
-
-            self.ref_profile_line_item = gl.GLLinePlotItem(
-                pos=np.column_stack((pts[:,0], pts[:,1], ref_prof)),
-                color=(0,0.4,0,1), width=2
-                #, glOptions='opaque'
-                #, antialias=True
-            )
-            self.view.addItem(self.ref_profile_line_item)
-
-            adj_prof = adjusted_grid[pts[:,1], pts[:,0]] + separation
-            adj_prof = adj_prof / 1000.0
-
-            self.adj_profile_line_item = gl.GLLinePlotItem(
-                pos=np.column_stack((pts[:,0], pts[:,1], adj_prof)),
-                color=(0,0,1,1), width=2
-                #, glOptions='opaque'
-                #, antialias=True
-            )
-            self.view.addItem(self.adj_profile_line_item)
-
-
-        # Połącz checkboxy z metodami
-        self.checkbox_ref.stateChanged.connect(self.toggle_surface_ref)
-        self.checkbox_adj.stateChanged.connect(self.toggle_surface_adj)
-        self.checkbox_line.stateChanged.connect(self.toggle_profile_line)
-        self.checkbox_plane.stateChanged.connect(self.toggle_cross_plane)
-
-    def add_cross_section_plane(self, line_points, z_min, z_max):
-        """
-        Rysuje półprzezroczystą płaszczyznę przekroju (jeden prostokąt!) w 3D, wyznaczoną przez końce linii profilu.
-        Zwraca obiekt mesh dla kontroli widoczności.
-        """
-        if line_points is None or len(line_points) < 2:
-            return None
-        p0 = np.array(line_points[0])
-        p1 = np.array(line_points[-1])
-        # Cztery wierzchołki prostokąta
-        pts = np.array([
-            [p0[0], p0[1], z_min],
-            [p1[0], p1[1], z_min],
-            [p1[0], p1[1], z_max],
-            [p0[0], p0[1], z_max],
-        ])
-        faces = np.array([
-            [0,1,2],
-            [0,2,3],
-        ])
-        color = np.array([0.5,0.5,0.7,0.7])
-        mesh = gl.GLMeshItem(vertexes=pts, faces=faces, glOptions='translucent', faceColors=np.tile(color, (2,1)), smooth=False, drawEdges=False)
-        self.view.addItem(mesh)
-        return mesh
-
-    # Metody do przełączania widoczności
-    def toggle_surface_ref(self, state):
-        if self.surface_ref_item:
-            self.surface_ref_item.setVisible(bool(state))
-
-    def toggle_surface_adj(self, state):
-        if self.surface_adj_item:
-            self.surface_adj_item.setVisible(bool(state))
-
-    def toggle_profile_line(self, state):
-        if self.ref_profile_line_item:
-            self.ref_profile_line_item.setVisible(bool(state))
-        if self.adj_profile_line_item:
-            self.adj_profile_line_item.setVisible(bool(state))
-
-    def toggle_cross_plane(self, state):
-        if self.cross_plane_item:
-            self.cross_plane_item.setVisible(bool(state))
-
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -250,9 +131,14 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.setGeometry(100, 100, 1000, 600)
 
         # --- PARAMETRY, metadane i domyślna ścieżka ---
-        self.metadata = {"pixel_size_x_mm": 0.00138}
+        self.metadata = {
+            "pixel_size_x_mm": 0.00138,
+            "pixel_size_y_mm": 0.00138,
+        }
         self.sigma = 5.0
         self.separation = 0
+
+        self.binary_contact = None
 
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
@@ -287,7 +173,9 @@ class ProfilViewer(QtWidgets.QMainWindow):
 
         # Prawa kolumna – binary image
         right_layout = QtWidgets.QVBoxLayout()
-        self.image_view = create_image_view()
+
+        self.image_view = SnapImageWidget()
+
         self.image_view.setMinimumWidth(400)
         right_layout.addWidget(self.image_view)
         vb = self.image_view.getView()
@@ -296,6 +184,9 @@ class ProfilViewer(QtWidgets.QMainWindow):
             # yRange=(0, self.reference_grid.shape[0]-1),
             padding=0
         )
+        self.image_view.getView().mousePressEvent = self.on_image_click
+        self.image_view.getView().mouseReleaseEvent = self.on_image_mouse_release
+        self.image_view.getView().mouseMoveEvent = self.on_image_mouse_move
         self.image_view.getView().sigRangeChanged.connect(self.on_range_changed)
 
         sep_layout = QtWidgets.QHBoxLayout()
@@ -339,6 +230,9 @@ class ProfilViewer(QtWidgets.QMainWindow):
         # self.x1, self.y1 = 0, 0
         # self.x2, self.y2 = width - 1, height - 1
 
+        self.line_drag_active = False
+        self.line_drag_which = None  # "start" albo "end"
+
         self.cursor_lines = []
         self.annotations = []
         self.mytest = []
@@ -370,7 +264,53 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.open_action.setEnabled(False)
         self.worker.start()
 
-    def show_3d_view(self):
+    def on_image_click(self, event):
+        if event.modifiers() & QtCore.Qt.ShiftModifier:
+            pos = event.scenePos()
+            vb = self.image_view.getView()
+            mouse_point = vb.mapSceneToView(pos)
+            x_img = int(round(mouse_point.x()))
+            y_img = int(round(mouse_point.y()))
+            img_shape = self.reference_grid_smooth.shape
+
+            # Po kliknięciu przesuwaj uchwyt [0] natychmiast:
+            self.x1 = np.clip(x_img, 0, img_shape[1]-1)
+            self.y1 = np.clip(y_img, 0, img_shape[0]-1)
+            self.x2 = np.clip(x_img, 0, img_shape[1]-1)
+            self.y2 = np.clip(y_img, 0, img_shape[0]-1)
+            # Uchwyt [1] zostaje bez zmian (albo podąża za myszą)
+            self.redraw_roi()
+            self.update_profile_from_roi()
+            # Wejdź w tryb "drag" dla drugiego uchwytu
+            self.line_drag_active = True
+            event.accept()
+        else:
+            pg.ViewBox.mousePressEvent(self.image_view.getView(), event)
+
+    def on_image_mouse_release(self, event):
+        if self.line_drag_active:
+            self.line_drag_active = False
+            event.accept()
+        else:
+            pg.ViewBox.mouseReleaseEvent(self.image_view.getView(), event)
+
+    def on_image_mouse_move(self, event):
+        if self.line_drag_active:
+            pos = event.scenePos()
+            vb = self.image_view.getView()
+            mouse_point = vb.mapSceneToView(pos)
+            x_img = int(round(mouse_point.x()))
+            y_img = int(round(mouse_point.y()))
+            img_shape = self.reference_grid_smooth.shape
+            self.x2 = np.clip(x_img, 0, img_shape[1] - 1)
+            self.y2 = np.clip(y_img, 0, img_shape[0] - 1)
+            self.redraw_roi()
+            self.update_profile_from_roi()
+            event.accept()
+        else:
+            pg.ViewBox.mouseMoveEvent(self.image_view.getView(), event)
+
+    def show_3d_view_1(self):
         # Wyznacz linię profilu
         if hasattr(self, 'rr') and hasattr(self, 'cc'):
             line_points = list(zip(self.cc, self.rr))  # (x, y) dla linii
@@ -381,12 +321,122 @@ class ProfilViewer(QtWidgets.QMainWindow):
         win.show()
         # Zatrzymaj referencję, żeby okno nie znikało
         self._win3d = win
+        win.destroyed.connect(lambda: setattr(self, "_win3d", None))
+
+    def show_3d_view(self):
+        viewbox = self.image_view.getView()
+        x_range, y_range = viewbox.viewRange()
+
+        # Zamień zakresy na indeksy obrazka
+        x_min, x_max = int(np.floor(x_range[0])), int(np.ceil(x_range[1]))
+        y_min, y_max = int(np.floor(y_range[0])), int(np.ceil(y_range[1]))
+        
+        # Upewnij się, że są w granicach obrazka
+        shape = self.reference_grid_smooth.shape
+        x_min = max(0, x_min)
+        x_max = min(shape[1]-1, x_max)
+        y_min = max(0, y_min)
+        y_max = min(shape[0]-1, y_max)
+
+        ref = self.reference_grid_smooth[y_min:y_max+1, x_min:x_max+1]
+        adj = self.adjusted_grid_corrected[y_min:y_max+1, x_min:x_max+1]
+
+        print(f"ref0: {self.reference_grid_smooth.shape}, adj0: {self.adjusted_grid_corrected.shape}")
+        print(f"x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max: {y_max}")
+
+        print('ref min:', np.nanmin(ref), 'ref max:', np.nanmax(ref), 'ref shape:', ref.shape)
+        print('ref NaN count:', np.isnan(ref).sum())
+
+        print('adj min:', np.nanmin(adj), 'adj max:', np.nanmax(adj), 'adj shape:', adj.shape)
+        print('adj NaN count:', np.isnan(adj).sum())
+
+
+        # # Wyznacz linię profilu
+        # if hasattr(self, 'rr') and hasattr(self, 'cc'):
+        #     line_points = list(zip(self.cc - x_min, self.rr - y_min))  # (x, y) dla linii
+        # else:
+        #     line_points = None
+
+        # Wyznacz linię profilu tylko z punktów wewnątrz wycinka!
+        if hasattr(self, 'rr') and hasattr(self, 'cc'):
+            points = np.column_stack((self.cc, self.rr))
+            mask_inside = (
+                (points[:, 0] >= x_min) & (points[:, 0] <= x_max) &
+                (points[:, 1] >= y_min) & (points[:, 1] <= y_max)
+            )
+            # ODEJMIJ x_min, y_min żeby profil był względem wycinka
+            line_points = [
+                (int(col - x_min), int(row - y_min))
+                for col, row, inside in zip(self.cc, self.rr, mask_inside) if inside
+            ]
+            if len(line_points) < 2:
+                line_points = None
+        else:
+            line_points = None
+
+        if getattr(self, "_win3d", None) is None:
+            self._win3d = Profile3DWindow(ref, adj, line_points=line_points, separation=self.separation)
+        else:
+            self._win3d.hide()
+            self._win3d.update_data(ref, adj, line_points=line_points, separation=self.separation)
+        self._win3d.show()
+        self._win3d.raise_()
+        self._win3d.activateWindow()
+
+    def update_volume_info(self):
+        if not self.binary_contact is None:
+            viewbox = self.image_view.getView()
+            x_range, y_range = viewbox.viewRange()
+
+            # Zamień zakresy na indeksy obrazka
+            x_min, x_max = int(np.floor(x_range[0])), int(np.ceil(x_range[1]))
+            y_min, y_max = int(np.floor(y_range[0])), int(np.ceil(y_range[1]))
+            # Upewnij się, że są w granicach obrazka
+            shape = self.binary_contact.shape
+            x_min = max(0, x_min)
+            x_max = min(shape[1]-1, x_max)
+            y_min = max(0, y_min)
+            y_max = min(shape[0]-1, y_max)
+            
+
+            px = self.metadata['pixel_size_x_mm'] * 1000
+            py = self.metadata['pixel_size_y_mm'] * 1000
+            pixel_area = px * py
+
+            # Wytnij fragment i zlicz białe piksele
+            fragment = self.binary_contact[y_min:y_max+1, x_min:x_max+1]
+            white_count = np.count_nonzero(fragment)
+            # total_count = fragment.size
+            # percent_white = 100.0 * white_count / total_count if total_count > 0 else 0
+            
+            white_area_um2 = pixel_area * white_count
+            white_area_mm2 = white_area_um2 * 1e-6
+
+
+            ref = self.reference_grid_smooth[y_min:y_max+1, x_min:x_max+1]
+            adj = self.adjusted_grid_corrected[y_min:y_max+1, x_min:x_max+1]
+            diff = ref - (adj + self.separation)
+
+            # Ustaw diff=0 tam, gdzie nie ma kontaktu (albo można pominąć)
+            diff_masked = np.where(fragment, diff, 0)
+
+            # Całkowita objętość (μm³)
+            volume_um3 = np.abs(np.sum(diff_masked)) * pixel_area
+            volume_mm3 = volume_um3 * 1e-9
+
+            print( f"piksel: {self.metadata['pixel_size_x_mm']} x {self.metadata['pixel_size_y_mm']}" )
+            
+
+            print(f"p1: {pixel_area:.4f}, pn: {white_area_um2:.4f}")
+
+            self.statusBar().showMessage(
+                # f"Białe pola w widoku: {white_count} / {total_count} ({percent_white:.1f}%)"
+                f"Białe pola w widoku: {white_count}, powierzchnia: {white_area_um2:.4f}μm² ({white_area_mm2}mm²), objętość: {volume_um3:.4f}μm³ ({volume_mm3:.4f}mm³)"
+            )
 
 
     def on_range_changed(self, viewbox, ranges):
-        x_range, y_range = viewbox.viewRange()
-        print(f"Ranges: {ranges}")
-        print(f"Nowy zakres X: {x_range}, Y: {y_range}")
+        self.update_volume_info()
 
     def toggle_tilt(self, state):
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
@@ -396,6 +446,7 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.adjusted_grid_corrected = self.adjusted_grid_smooth + offset_correction
         if self.checkbox_tilt.isChecked():
             self.adjusted_grid_corrected = remove_relative_tilt(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
+        self.adjusted_grid_corrected = remove_relative_offset(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
 
         self.redraw_roi()
         self.update_plot()
@@ -434,6 +485,8 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.adjusted_grid_corrected = result["adjusted_grid_corrected"]
         if self.checkbox_tilt.isChecked():
             self.adjusted_grid_corrected = remove_relative_tilt(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
+
+        self.adjusted_grid_corrected = remove_relative_offset(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
 
         size_x_mm = self.reference_grid.shape[0] * self.metadata['pixel_size_x_mm']
         self.plot_widget.getPlotItem().getViewBox().setRange(xRange=(0, size_x_mm))
@@ -505,13 +558,62 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.separation = self.spinbox_separation.value()
         valid_mask = ~np.isnan(self.reference_grid_smooth) & ~np.isnan(self.adjusted_grid_corrected)
         difference = self.reference_grid_smooth - (self.adjusted_grid_corrected + self.separation)
-        binary_contact = (difference <= 0) & valid_mask
+        # binary_contact = (difference <= 0) & valid_mask
+        binary_contact = (difference > 0) & valid_mask
 
-        self.image_view.setImage(binary_contact.T, autoRange=False, autoLevels=True)
+        self.image_view.setImage(binary_contact.T) #, autoRange=False, autoLevels=True)
 
         self.update_profile_from_roi()
 
+        self.binary_contact = binary_contact
+
+        self.update_volume_info()
+
         return binary_contact.shape
+
+    # def redraw_roi(self):
+    #     if hasattr(self, 'line_roi'):
+    #         self.image_view.getView().removeItem(self.line_roi)
+    #     self.line_roi = pg.LineROI([self.x1, self.y1], [self.x2, self.y2], pen=pg.mkPen('r', width=2), width=1)
+    #     self.line_roi.handles[2]['type'] = 'center'
+    #     self.line_roi.sigRegionChanged.connect(self.update_profile_from_roi)
+    #     self.image_view.getView().addItem(self.line_roi)
+    #     self.line_roi.setZValue(10)
+
+    def update_roi_markers(self):
+        # Usuń stare markery (jeśli są)
+        if hasattr(self, "roi_endpoint_markers"):
+            for m in self.roi_endpoint_markers:
+                self.image_view.getView().removeItem(m)
+        self.roi_endpoint_markers = []
+        if hasattr(self, "roi_endpoint_labels"):
+            for t in self.roi_endpoint_labels:
+                self.image_view.getView().removeItem(t)
+        self.roi_endpoint_labels = []
+        
+        # Pobierz BIEŻĄCE pozycje końców ROI w układzie obrazka!
+        handle0 = self.line_roi.getHandles()[0]
+        handle1 = self.line_roi.getHandles()[1]
+        pt0 = self.line_roi.mapToParent(handle0.pos())
+        pt1 = self.line_roi.mapToParent(handle1.pos())
+        x1, y1 = pt0.x(), pt0.y()
+        x2, y2 = pt1.x(), pt1.y()
+        
+        # Dodaj markery
+        marker1 = pg.ScatterPlotItem([x1], [y1], size=18, pen=pg.mkPen('g', width=3), brush=pg.mkBrush(0,255,0,100), symbol='o')
+        marker2 = pg.ScatterPlotItem([x2], [y2], size=18, pen=pg.mkPen('r', width=3), brush=pg.mkBrush(255,0,0,100), symbol='x')
+        self.image_view.getView().addItem(marker1)
+        self.image_view.getView().addItem(marker2)
+        self.roi_endpoint_markers = [marker1, marker2]
+        
+        # Opcjonalnie: etykiety z numerkami
+        label1 = pg.TextItem("1", color='g', anchor=(0.5, 1.5))
+        label1.setPos(x1, y1)
+        label2 = pg.TextItem("2", color='r', anchor=(0.5, 1.5))
+        label2.setPos(x2, y2)
+        self.image_view.getView().addItem(label1)
+        self.image_view.getView().addItem(label2)
+        self.roi_endpoint_labels = [label1, label2]
 
     def redraw_roi(self):
         if hasattr(self, 'line_roi'):
@@ -519,8 +621,11 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.line_roi = pg.LineROI([self.x1, self.y1], [self.x2, self.y2], pen=pg.mkPen('r', width=2), width=1)
         self.line_roi.handles[2]['type'] = 'center'
         self.line_roi.sigRegionChanged.connect(self.update_profile_from_roi)
+        self.line_roi.sigRegionChanged.connect(self.update_roi_markers)  # <-- dodaj to!
         self.image_view.getView().addItem(self.line_roi)
         self.line_roi.setZValue(10)
+        self.update_roi_markers()  # <-- narysuj od razu w dobrym miejscu
+
 
     def clamp_roi_to_image(self):
         img_shape = self.reference_grid_smooth.shape  # (rows, cols)
