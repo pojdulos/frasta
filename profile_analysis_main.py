@@ -12,7 +12,7 @@ from math import atan, degrees
 import pyqtgraph.opengl as gl
 
 from profile3DWindow import Profile3DWindow
-from pixelSnapViewBox import SnapImageWidget
+#from pixelSnapViewBox import SnapImageWidget
 
 def compute_offset_in_center(reference, target, window_size=100):
     # Rozmiary obrazów
@@ -71,7 +71,7 @@ def create_image_view():
     view.ui.histogram.hide()
     view.ui.roiBtn.hide()
     view.ui.menuBtn.hide()
-    view.getView().setBackgroundColor('w')
+    # view.getView().setBackgroundColor('w')
     return view
 
 def resource_path(relative_path):
@@ -139,6 +139,7 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.separation = 0
 
         self.binary_contact = None
+        self._preview_win = None
 
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
@@ -162,10 +163,6 @@ class ProfilViewer(QtWidgets.QMainWindow):
 
         # Środkowa kolumna – wykres i suwaki
         center_layout = QtWidgets.QVBoxLayout()
-        # self.plot_widget = pg.PlotWidget()
-        # size_x_mm = self.reference_grid.shape[0] * self.metadata['pixel_size_x_mm']
-        # self.plot_widget.getPlotItem().getViewBox().setRange(xRange=(0, size_x_mm))
-        # self.plot_widget.getPlotItem().getViewBox().setMouseEnabled(x=True, y=True)
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.getPlotItem().getViewBox().setRange(xRange=(0, 1))
         self.plot_widget.getPlotItem().getViewBox().setMouseEnabled(x=True, y=True)
@@ -174,7 +171,7 @@ class ProfilViewer(QtWidgets.QMainWindow):
         # Prawa kolumna – binary image
         right_layout = QtWidgets.QVBoxLayout()
 
-        self.image_view = SnapImageWidget()
+        self.image_view = create_image_view() # SnapImageWidget()
 
         self.image_view.setMinimumWidth(400)
         right_layout.addWidget(self.image_view)
@@ -184,6 +181,7 @@ class ProfilViewer(QtWidgets.QMainWindow):
             # yRange=(0, self.reference_grid.shape[0]-1),
             padding=0
         )
+
         self.image_view.getView().mousePressEvent = self.on_image_click
         self.image_view.getView().mouseReleaseEvent = self.on_image_mouse_release
         self.image_view.getView().mouseMoveEvent = self.on_image_mouse_move
@@ -264,6 +262,16 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.open_action.setEnabled(False)
         self.worker.start()
 
+    def show_preview(self, fragment, title="Podgląd wycinka"):
+        if getattr(self, "_preview_win", None) is None:
+            self._preview_win = pg.ImageView()
+            self._preview_win.setWindowTitle(title)
+            self._preview_win.show()
+        self._preview_win.setImage(fragment)
+        self._preview_win.raise_()
+        self._preview_win.activateWindow()
+
+
     def on_image_click(self, event):
         if event.modifiers() & QtCore.Qt.ShiftModifier:
             pos = event.scenePos()
@@ -309,19 +317,6 @@ class ProfilViewer(QtWidgets.QMainWindow):
             event.accept()
         else:
             pg.ViewBox.mouseMoveEvent(self.image_view.getView(), event)
-
-    def show_3d_view_1(self):
-        # Wyznacz linię profilu
-        if hasattr(self, 'rr') and hasattr(self, 'cc'):
-            line_points = list(zip(self.cc, self.rr))  # (x, y) dla linii
-        else:
-            line_points = None
-        # Utwórz i pokaż okno 3D
-        win = Profile3DWindow(self.reference_grid_smooth, self.adjusted_grid_corrected, line_points=line_points, separation=self.separation)
-        win.show()
-        # Zatrzymaj referencję, żeby okno nie znikało
-        self._win3d = win
-        win.destroyed.connect(lambda: setattr(self, "_win3d", None))
 
     def show_3d_view(self):
         viewbox = self.image_view.getView()
@@ -383,54 +378,63 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self._win3d.raise_()
         self._win3d.activateWindow()
 
-    def update_volume_info(self):
-        if not self.binary_contact is None:
-            viewbox = self.image_view.getView()
-            x_range, y_range = viewbox.viewRange()
+    def get_viewbox_ranges_int(self, shape=None, overflow=False):
+        viewbox = self.image_view.getView()
+        x_range, y_range = viewbox.viewRange()
 
-            # Zamień zakresy na indeksy obrazka
-            x_min, x_max = int(np.floor(x_range[0])), int(np.ceil(x_range[1]))
-            y_min, y_max = int(np.floor(y_range[0])), int(np.ceil(y_range[1]))
-            # Upewnij się, że są w granicach obrazka
-            shape = self.binary_contact.shape
+        min_range = viewbox.mapToParent(QPointF(x_range[0],y_range[0]))
+        max_range = viewbox.mapToParent(QPointF(x_range[1],y_range[1]))
+
+        x_range = [min_range.x(),max_range.x()]
+        y_range = [min_range.y(),max_range.y()]
+
+        print(f"ViewBox x_range: {x_range}, y_range: {y_range}")
+
+        if overflow:
+            x_min, x_max = int(np.floor(x_range[0])), int(np.ceil(x_range[1]))-1
+            y_min, y_max = int(np.floor(y_range[0])), int(np.ceil(y_range[1]))-1
+        else:
+            x_min, x_max = int(np.ceil(x_range[0])), int(np.floor(x_range[1]))-1
+            y_min, y_max = int(np.ceil(y_range[0])), int(np.floor(y_range[1]))-1
+
+        if not shape is None:
             x_min = max(0, x_min)
             x_max = min(shape[1]-1, x_max)
             y_min = max(0, y_min)
             y_max = min(shape[0]-1, y_max)
-            
 
-            px = self.metadata['pixel_size_x_mm'] * 1000
-            py = self.metadata['pixel_size_y_mm'] * 1000
+        print(f"Image x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max: {y_max}")
+
+        return x_min, x_max, y_min, y_max            
+
+    def update_volume_info(self):
+        if not self.binary_contact is None:
+            x_min, x_max, y_min, y_max = self.get_viewbox_ranges_int(shape = self.binary_contact.shape)
+
+            px = self.metadata['pixel_size_x_mm'] * 1000.0
+            py = self.metadata['pixel_size_y_mm'] * 1000.0
+
             pixel_area = px * py
 
-            # Wytnij fragment i zlicz białe piksele
             fragment = self.binary_contact[y_min:y_max+1, x_min:x_max+1]
-            white_count = np.count_nonzero(fragment)
-            # total_count = fragment.size
-            # percent_white = 100.0 * white_count / total_count if total_count > 0 else 0
             
+            print(f"fragment.shape: {fragment.shape}")
+
+            white_count = np.count_nonzero(fragment)
+
             white_area_um2 = pixel_area * white_count
             white_area_mm2 = white_area_um2 * 1e-6
-
 
             ref = self.reference_grid_smooth[y_min:y_max+1, x_min:x_max+1]
             adj = self.adjusted_grid_corrected[y_min:y_max+1, x_min:x_max+1]
             diff = ref - (adj + self.separation)
 
-            # Ustaw diff=0 tam, gdzie nie ma kontaktu (albo można pominąć)
             diff_masked = np.where(fragment, diff, 0)
 
-            # Całkowita objętość (μm³)
             volume_um3 = np.abs(np.sum(diff_masked)) * pixel_area
             volume_mm3 = volume_um3 * 1e-9
 
-            print( f"piksel: {self.metadata['pixel_size_x_mm']} x {self.metadata['pixel_size_y_mm']}" )
-            
-
-            print(f"p1: {pixel_area:.4f}, pn: {white_area_um2:.4f}")
-
             self.statusBar().showMessage(
-                # f"Białe pola w widoku: {white_count} / {total_count} ({percent_white:.1f}%)"
                 f"Białe pola w widoku: {white_count}, powierzchnia: {white_area_um2:.4f}μm² ({white_area_mm2}mm²), objętość: {volume_um3:.4f}μm³ ({volume_mm3:.4f}mm³)"
             )
 
@@ -561,7 +565,7 @@ class ProfilViewer(QtWidgets.QMainWindow):
         # binary_contact = (difference <= 0) & valid_mask
         binary_contact = (difference > 0) & valid_mask
 
-        self.image_view.setImage(binary_contact.T) #, autoRange=False, autoLevels=True)
+        self.image_view.setImage(binary_contact.T, autoRange=False, autoLevels=True)
 
         self.update_profile_from_roi()
 
@@ -570,15 +574,6 @@ class ProfilViewer(QtWidgets.QMainWindow):
         self.update_volume_info()
 
         return binary_contact.shape
-
-    # def redraw_roi(self):
-    #     if hasattr(self, 'line_roi'):
-    #         self.image_view.getView().removeItem(self.line_roi)
-    #     self.line_roi = pg.LineROI([self.x1, self.y1], [self.x2, self.y2], pen=pg.mkPen('r', width=2), width=1)
-    #     self.line_roi.handles[2]['type'] = 'center'
-    #     self.line_roi.sigRegionChanged.connect(self.update_profile_from_roi)
-    #     self.image_view.getView().addItem(self.line_roi)
-    #     self.line_roi.setZValue(10)
 
     def update_roi_markers(self):
         # Usuń stare markery (jeśli są)
