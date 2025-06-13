@@ -346,12 +346,6 @@ class ProfilViewer(QtWidgets.QMainWindow):
         print('adj NaN count:', np.isnan(adj).sum())
 
 
-        # # Wyznacz linię profilu
-        # if hasattr(self, 'rr') and hasattr(self, 'cc'):
-        #     line_points = list(zip(self.cc - x_min, self.rr - y_min))  # (x, y) dla linii
-        # else:
-        #     line_points = None
-
         # Wyznacz linię profilu tylko z punktów wewnątrz wycinka!
         if hasattr(self, 'rr') and hasattr(self, 'cc'):
             points = np.column_stack((self.cc, self.rr))

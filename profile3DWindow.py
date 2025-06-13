@@ -86,8 +86,10 @@ class Profile3DWindow(QtWidgets.QWidget):
         z_min = min(np.nanmin(Z_ref), np.nanmin(Z_adj))
         z_max = max(np.nanmax(Z_ref), np.nanmax(Z_adj))
 
-        z_min -= np.abs(0.1 * z_min)
-        z_max += np.abs(0.1 * z_max)
+        margin = 0.1 * (z_max - z_min)
+
+        z_min -= margin
+        z_max += margin
 
         self.cross_plane_item = self.add_cross_section_plane(line_points, z_min, z_max)
 

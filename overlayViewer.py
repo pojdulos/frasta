@@ -25,6 +25,11 @@ class OverlayViewer(QtWidgets.QWidget):
         
         self.scan1 = scan1
         self.scan2 = scan2
+        self._orig_scan1 = scan1.copy()
+        self._orig_scan2 = scan2.copy()
+
+
+        self._last_diff_image = None   # oryginalna różnica (przed maskowaniem)
 
         # Obrazy
         self.img1 = pg.ImageItem(scan1)
@@ -34,18 +39,29 @@ class OverlayViewer(QtWidgets.QWidget):
         self.viewbox.addItem(self.img1)
         self.viewbox.addItem(self.img2)
 
-        # Oblicz wspólny zakres jasności z marginesem
-        z_min = min(np.nanmin(scan1), np.nanmin(scan2))
-        z_max = max(np.nanmax(scan1), np.nanmax(scan2))
-        margin = 0.1 * (z_max - z_min)  # 5% margines
+        # Ustal najmniejszy wspólny rozmiar
+        h = min(scan1.shape[0], scan2.shape[0])
+        w = min(scan1.shape[1], scan2.shape[1])
+        scan1_c = scan1[:h, :w]
+        scan2_c = scan2[:h, :w]
 
-        print(z_min, z_max)
-        
+        # Wspólna maska: tylko gdzie oba mają dane
+        common_mask = (~np.isnan(scan1_c)) & (~np.isnan(scan2_c))
+        if np.any(common_mask):
+            common_values = np.concatenate([scan1_c[common_mask], scan2_c[common_mask]])
+            z_min = np.nanmin(common_values)
+            z_max = np.nanmax(common_values)
+        else:
+            z_min = max(np.nanmin(scan1_c), np.nanmin(scan2_c))
+            z_max = min(np.nanmax(scan1_c), np.nanmax(scan2_c))
+        margin = 0.1 * (z_max - z_min)
         levels = (z_min - margin, z_max + margin)
-        #levels = (-1000, 1000)
+
+        print(f"levels: {levels}")
 
         self.img1.setLevels(levels)
         self.img2.setLevels(levels)
+
 
         # Dopasowanie widoku do zawartości
         self.viewbox.autoRange()
@@ -53,10 +69,10 @@ class OverlayViewer(QtWidgets.QWidget):
 
         # Obraz różnicy
         self.diff_view = pg.ImageView(view=pg.PlotItem())
-        self.diff_view.ui.histogram.hide()
+        #self.diff_view.ui.histogram.hide()
         self.diff_view.ui.roiBtn.hide()
         self.diff_view.ui.menuBtn.hide()
-        self.diff_view.setMinimumWidth(300)
+        self.diff_view.setMinimumWidth(500)
 
         # Układ poziomy: widok główny + widok różnic
         split = QtWidgets.QHBoxLayout()
@@ -100,6 +116,31 @@ class OverlayViewer(QtWidgets.QWidget):
         self.save_button = QtWidgets.QPushButton("Save aligned grids to .h5")
         self.save_button.clicked.connect(self.saveAlignedScans)
         tool2_layout.addWidget(self.save_button)
+
+        # Zakres min/max
+        self.levels_min = QtWidgets.QDoubleSpinBox()
+        self.levels_min.setDecimals(2)
+        self.levels_min.setPrefix("Min: ")
+        self.levels_min.setRange(-1e6, 1e6)
+        self.levels_max = QtWidgets.QDoubleSpinBox()
+        self.levels_max.setDecimals(2)
+        self.levels_max.setPrefix("Max: ")
+        self.levels_max.setRange(-1e6, 1e6)
+
+        # Domyślne wartości
+        self.levels_min.setValue(levels[0])
+        self.levels_max.setValue(levels[1])
+
+        # self.levels_min.valueChanged.connect(self.update_levels)
+        # self.levels_max.valueChanged.connect(self.update_levels)
+        # self.levels_min.valueChanged.connect(self.update_overlay_levels)
+        # self.levels_max.valueChanged.connect(self.update_overlay_levels)
+        self.levels_min.valueChanged.connect(self.apply_overlay_mask)
+        self.levels_max.valueChanged.connect(self.apply_overlay_mask)
+
+        tool2_layout.addWidget(self.levels_min)
+        tool2_layout.addWidget(self.levels_max)
+
 
         south_layout.addLayout(tool2_layout)
 
@@ -243,8 +284,25 @@ class OverlayViewer(QtWidgets.QWidget):
             cval=np.nan
         )
 
-        scan_diff = self.scan1 - scan2_trans
-        self.diff_view.setImage(np.nan_to_num(scan_diff, nan=0), autoLevels=False)
+        # Zabezpieczenie na różne wymiary
+        h = min(self.scan1.shape[0], scan2_trans.shape[0])
+        w = min(self.scan1.shape[1], scan2_trans.shape[1])
+
+        scan1_cropped = self.scan1[:h, :w]
+        scan2_trans_cropped = scan2_trans[:h, :w]
+
+        scan_diff = scan1_cropped - scan2_trans_cropped
+        #self.diff_view.setImage(np.nan_to_num(scan_diff, nan=0), autoLevels=False)
+
+        self.diff_view.setImage(np.nan_to_num(scan_diff, nan=0), autoLevels=True)
+        # self._last_diff_image = scan_diff
+        # self.update_levels()
+
+        # levels = (np.nanpercentile(scan_diff, 1), np.nanpercentile(scan_diff, 99))
+        # self.diff_view.setLevels(levels)
+
+        # scan_diff = self.scan1 - scan2_trans
+        # self.diff_view.setImage(np.nan_to_num(scan_diff, nan=0), autoLevels=False)
 
         # angle = float(self.slider_angle.value()) / 10.0
 
@@ -269,6 +327,36 @@ class OverlayViewer(QtWidgets.QWidget):
 
         # self.diff_view.setImage(np.nan_to_num(distance_map, nan=0), autoLevels=False)
         # self.diff_view.setLevels(-500, 500)
+
+    def update_levels(self):
+        if self._last_diff_image is None:
+            return
+        vmin = self.levels_min.value()
+        vmax = self.levels_max.value()
+        # Maskowanie: wszystko poza zakresem ustaw jako NaN
+        masked = self._last_diff_image.copy()
+        mask = (masked < vmin) | (masked > vmax)
+        masked[mask] = np.nan
+        self.diff_view.setImage(np.nan_to_num(masked, nan=0), autoLevels=False)
+
+    def update_overlay_levels(self):
+        vmin = self.levels_min.value()
+        vmax = self.levels_max.value()
+        self.img1.setLevels((vmin, vmax))
+        self.img2.setLevels((vmin, vmax))
+
+    def apply_overlay_mask(self):
+        vmin = self.levels_min.value()
+        vmax = self.levels_max.value()
+        masked1 = self._orig_scan1.copy()
+        masked2 = self._orig_scan2.copy()
+        masked1[(masked1 < vmin) | (masked1 > vmax)] = np.nan
+        masked2[(masked2 < vmin) | (masked2 > vmax)] = np.nan
+        self.img1.setImage(masked1, autoLevels=False)
+        self.img2.setImage(masked2, autoLevels=False)
+        self.img1.setLevels((vmin, vmax))
+        self.img2.setLevels((vmin, vmax))
+
 
     def updateTransform(self):
         tx = self.slider_tx.value()
@@ -331,30 +419,31 @@ class OverlayViewer(QtWidgets.QWidget):
 
 
 
-data = np.load("source_data/scan1_interp.npz")
-scan1 = data['grid']
-# x1 = data['x_unique']
-# y1 = data['y_unique']
-
-data = np.load("source_data/scan2_interp.npz")
-scan2 = data['grid']
-# x2 = data['x_unique']
-# y2 = data['y_unique']
-
-#sigma = 0.5
-#scan1 = gaussian_filter(scan1, sigma=sigma)
-
-s1 = scan1 #np.where(np.isnan(scan1), np.nanmin(scan1), scan1)
-s2 = scan2 # np.where(np.isnan(scan2), np.nanmax(scan2), scan2)
-
-s2 = np.flipud(s2)
-s2 = -s2
-
-# Normalizacja
-#scan1 = (scan1 - scan1.min()) / (scan1.max() - scan1.min())
-#scan2 = (scan2 - scan2.min()) / (scan2.max() - scan2.min())
-
 if __name__ == '__main__':
+
+    data = np.load("source_data/scan1_interp.npz")
+    scan1 = data['grid']
+    # x1 = data['x_unique']
+    # y1 = data['y_unique']
+
+    data = np.load("source_data/scan2_interp.npz")
+    scan2 = data['grid']
+    # x2 = data['x_unique']
+    # y2 = data['y_unique']
+
+    #sigma = 0.5
+    #scan1 = gaussian_filter(scan1, sigma=sigma)
+
+    s1 = scan1 #np.where(np.isnan(scan1), np.nanmin(scan1), scan1)
+    s2 = scan2 # np.where(np.isnan(scan2), np.nanmax(scan2), scan2)
+
+    s2 = np.flipud(s2)
+    s2 = -s2
+
+    # Normalizacja
+    #scan1 = (scan1 - scan1.min()) / (scan1.max() - scan1.min())
+    #scan2 = (scan2 - scan2.min()) / (scan2.max() - scan2.min())
+
     app = QtWidgets.QApplication([])
     viewer = OverlayViewer(s1, s2)
     viewer.setWindowTitle("Overlay Viewer with Sliders")
