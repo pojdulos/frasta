@@ -1,19 +1,12 @@
 import numpy as np
-from scipy.interpolate import griddata
-import matplotlib.pyplot as plt
-from scipy.ndimage import rotate, shift
-import matplotlib.patches as patches
-import os
-import pandas as pd
-import cv2
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
-import numpy as np
-from scipy.ndimage import gaussian_filter
 
 class OverlayViewer(QtWidgets.QWidget):
-    def __init__(self, scan1, scan2):
+    def __init__(self, scan1, scan2, on_accept=None):
         super().__init__()
+
+        self.on_accept = on_accept
 
         # Layout główny
         layout = QtWidgets.QVBoxLayout(self)
@@ -117,6 +110,10 @@ class OverlayViewer(QtWidgets.QWidget):
         self.save_button.clicked.connect(self.saveAlignedScans)
         tool2_layout.addWidget(self.save_button)
 
+        self.accept_button = QtWidgets.QPushButton("Zatwierdź i przekaż do głównego programu")
+        self.accept_button.clicked.connect(self.accept_result)
+        tool2_layout.addWidget(self.accept_button)
+
         # Zakres min/max
         self.levels_min = QtWidgets.QDoubleSpinBox()
         self.levels_min.setDecimals(2)
@@ -131,10 +128,6 @@ class OverlayViewer(QtWidgets.QWidget):
         self.levels_min.setValue(levels[0])
         self.levels_max.setValue(levels[1])
 
-        # self.levels_min.valueChanged.connect(self.update_levels)
-        # self.levels_max.valueChanged.connect(self.update_levels)
-        # self.levels_min.valueChanged.connect(self.update_overlay_levels)
-        # self.levels_max.valueChanged.connect(self.update_overlay_levels)
         self.levels_min.valueChanged.connect(self.apply_overlay_mask)
         self.levels_max.valueChanged.connect(self.apply_overlay_mask)
 
@@ -256,6 +249,37 @@ class OverlayViewer(QtWidgets.QWidget):
         QtWidgets.QMessageBox.information(self, "Zapisano", f"Zapisano do pliku:\n{path}")
 
     
+    def accept_result(self):
+        # pobierz aktualne dopasowane siatki, np. po transformacji
+        # tutaj self.scan2 to oryginał, a self.img2.image to może być obraz po transformacji (sprawdź!)
+        # dla uproszczenia zakładamy, że masz przetransformowaną wersję jako self.img2.image (lub inny atrybut)
+        from scipy.ndimage import affine_transform
+
+        qt_transform = self.img2.transform()
+        m = np.array([
+            [qt_transform.m11(), qt_transform.m21(), qt_transform.m31()],
+            [qt_transform.m12(), qt_transform.m22(), qt_transform.m32()],
+            [0,                 0,                 1]
+        ])
+        affine_matrix = np.linalg.inv(m)[0:2, 0:3]
+
+        scan2_trans = affine_transform(
+            self.scan2,
+            matrix=affine_matrix[:, :2],
+            offset=affine_matrix[:, 2],
+            order=1,
+            mode='constant',
+            cval=np.nan
+        )
+        h = min(self.scan1.shape[0], scan2_trans.shape[0])
+        w = min(self.scan1.shape[1], scan2_trans.shape[1])
+        scan1_cropped = self.scan1[:h, :w]
+        scan2_trans_cropped = scan2_trans[:h, :w]
+
+        # Wywołaj callback
+        if self.on_accept is not None:
+            self.on_accept(scan1_cropped, scan2_trans_cropped)
+        self.close()
 
     def update_difference_map(self):
         tx = self.slider_tx.value()
@@ -292,41 +316,12 @@ class OverlayViewer(QtWidgets.QWidget):
         scan2_trans_cropped = scan2_trans[:h, :w]
 
         scan_diff = scan1_cropped - scan2_trans_cropped
-        #self.diff_view.setImage(np.nan_to_num(scan_diff, nan=0), autoLevels=False)
 
         self.diff_view.setImage(np.nan_to_num(scan_diff, nan=0), autoLevels=True)
-        # self._last_diff_image = scan_diff
-        # self.update_levels()
-
-        # levels = (np.nanpercentile(scan_diff, 1), np.nanpercentile(scan_diff, 99))
-        # self.diff_view.setLevels(levels)
-
-        # scan_diff = self.scan1 - scan2_trans
-        # self.diff_view.setImage(np.nan_to_num(scan_diff, nan=0), autoLevels=False)
-
-        # angle = float(self.slider_angle.value()) / 10.0
-
-        # # Przekształcenie danych
-        # img2_rotated = rotate(self.original_scan2, angle, reshape=False, order=1, mode='constant', cval=np.nan)
-        # img2_transformed = shift(img2_rotated, shift=(ty, tx), order=1, mode='constant', cval=np.nan)
-
-        # self.diff_view.setImage(np.nan_to_num(distance_map, nan=0), autoLevels=False)
-
-        # h = min(img2_transformed.shape[0], img1_data.shape[0])
-        # w = min(img2_transformed.shape[1], img1_data.shape[1])
-        # img2_transformed = img2_transformed[:h, :w]
-        # img1_data = img1_data[:h, :w]
-
-        # distance_map = img1_data - img2_transformed
-        # valid_mask = ~np.isnan(img1_data) & ~np.isnan(img2_transformed)
-        # distance_map = np.where(valid_mask, distance_map, np.nan)
 
         image_item = self.diff_view.getImageItem()
         lut = pg.colormap.get("inferno").getLookupTable(0.0, 1.0, 512)
         image_item.setLookupTable(lut)
-
-        # self.diff_view.setImage(np.nan_to_num(distance_map, nan=0), autoLevels=False)
-        # self.diff_view.setLevels(-500, 500)
 
     def update_levels(self):
         if self._last_diff_image is None:
@@ -375,74 +370,22 @@ class OverlayViewer(QtWidgets.QWidget):
         transform.rotate(angle)                # obrót wokół środka
         transform.translate(-cx, -cy)          # wróć na miejsce
 
-        # transform = QtGui.QTransform()
-        # transform.translate(tx, ty)
-        # transform.rotate(angle)
-
         self.img2.setTransform(transform)
-
-        # # Oblicz przekształcony obraz
-        # img2_transformed = self.img2.image
-        # img1_data = self.img1.image
-
-        # if img2_transformed is None or img1_data is None:
-        #     return
-
-        # # 1. Oblicz transformację jako macierz
-        # angle_rad = np.deg2rad(angle)
-        # cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
-
-        # # 2. Oblicz transformację odwrotną i zastosuj do siatki
-        # # użyj scipy.ndimage.shift + rotate
-        # img2_transformed = rotate(self.original_scan2, angle, reshape=False, order=1, mode='constant', cval=np.nan)
-        # img2_transformed = shift(img2_transformed, shift=(ty, tx), order=1, mode='constant', cval=np.nan)
-
-        # h = min(img2_transformed.shape[0], img1_data.shape[0])
-        # w = min(img2_transformed.shape[1], img1_data.shape[1])
-        # img2_transformed = img2_transformed[:h, :w]
-        # img1_data = img1_data[:h, :w]
-
-        # distance_map = img1_data - img2_transformed
-        # valid_mask = ~np.isnan(img1_data) & ~np.isnan(img2_transformed)
-        # distance_map = np.where(valid_mask, distance_map, np.nan)
-
-        # # Uzyskaj dostęp do ImageItem w ImageView
-        # image_item = self.diff_view.getImageItem()
-
-        # # Ustaw mapę kolorów
-        # lut = pg.colormap.get("plasma").getLookupTable(0.0, 1.0, 512)
-        # image_item.setLookupTable(lut)
-
-        # # Teraz możesz bezpiecznie ustawić obraz
-        # self.diff_view.setImage(np.nan_to_num(distance_map, nan=0), autoLevels=False)
-        # self.diff_view.setLevels(-500, 500)
 
 
 
 if __name__ == '__main__':
-
     data = np.load("source_data/scan1_interp.npz")
     scan1 = data['grid']
-    # x1 = data['x_unique']
-    # y1 = data['y_unique']
 
     data = np.load("source_data/scan2_interp.npz")
     scan2 = data['grid']
-    # x2 = data['x_unique']
-    # y2 = data['y_unique']
-
-    #sigma = 0.5
-    #scan1 = gaussian_filter(scan1, sigma=sigma)
 
     s1 = scan1 #np.where(np.isnan(scan1), np.nanmin(scan1), scan1)
     s2 = scan2 # np.where(np.isnan(scan2), np.nanmax(scan2), scan2)
 
     s2 = np.flipud(s2)
     s2 = -s2
-
-    # Normalizacja
-    #scan1 = (scan1 - scan1.min()) / (scan1.max() - scan1.min())
-    #scan2 = (scan2 - scan2.min()) / (scan2.max() - scan2.min())
 
     app = QtWidgets.QApplication([])
     viewer = OverlayViewer(s1, s2)

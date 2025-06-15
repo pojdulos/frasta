@@ -19,7 +19,7 @@ class AboutDialog(QtWidgets.QDialog):
         This software uses icons from <a href='https://icons8.com/icons/set/eyedropper'>Icons8.com</a>.<br>
         <small>Some icons are from Google Material Icons (Apache 2.0) and/or FontAwesome (CC BY 4.0).</small>
         <br><br>
-        &copy; 2024 IITiS PAN & IICh PAN
+        &copy; 2025 IITiS PAN & IICh PAN
         """)
         label.setOpenExternalLinks(True)
         layout.addWidget(label)

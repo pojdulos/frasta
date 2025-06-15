@@ -2,58 +2,10 @@ import sys
 import numpy as np
 import pandas as pd
 from PyQt5 import QtWidgets, QtCore
-import pyqtgraph as pg
-from skimage.segmentation import flood
-from scipy.interpolate import griddata
-import trimesh
 from PyQt5.QtGui import QIcon
-
 from overlayViewer import OverlayViewer
 from aboutDialog import AboutDialog
-
-def grid_to_mesh_vectorized(grid, pixel_size_x=1.0, pixel_size_y=1.0):
-    h, w = grid.shape
-
-    # Siatka XY
-    y_indices, x_indices = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
-    x_coords = x_indices * pixel_size_x
-    y_coords = y_indices * pixel_size_y
-    z_coords = grid
-
-    # Wszystkie wierzchołki
-    vertices = np.stack([x_coords, y_coords, z_coords], axis=-1).reshape(-1, 3)
-
-    # Maska ważnych punktów (nie NaN)
-    valid_mask = ~np.isnan(vertices[:, 2])
-    index_map = -np.ones(h * w, dtype=int)
-    index_map[valid_mask] = np.arange(np.count_nonzero(valid_mask))
-
-    # Indeksy trójkątów
-    idx_tl = np.ravel_multi_index((np.arange(h - 1)[:, None], np.arange(w - 1)[None, :]), dims=(h, w))
-    idx_tr = idx_tl + 1
-    idx_bl = idx_tl + w
-    idx_br = idx_bl + 1
-
-    # Spłaszczone i połączone
-    idx_tl = idx_tl.ravel()
-    idx_tr = idx_tr.ravel()
-    idx_bl = idx_bl.ravel()
-    idx_br = idx_br.ravel()
-
-    # Tylko tam, gdzie wszystkie 4 są ważne
-    valid_quad = (index_map[idx_tl] >= 0) & (index_map[idx_tr] >= 0) & \
-                 (index_map[idx_bl] >= 0) & (index_map[idx_br] >= 0)
-
-    # Dwa trójkąty na każdy kwadrat
-    faces_a = np.stack([index_map[idx_tl], index_map[idx_tr], index_map[idx_br]], axis=1)[valid_quad]
-    faces_b = np.stack([index_map[idx_tl], index_map[idx_br], index_map[idx_bl]], axis=1)[valid_quad]
-    faces = np.vstack([faces_a, faces_b])
-
-    # Przefiltrowane wierzchołki
-    vertices = vertices[valid_mask]
-
-    return vertices.astype(np.float32), faces.astype(np.int32)
-
+from scanTab import ScanTab
 
 
 class GridWorker(QtCore.QObject):
@@ -108,320 +60,6 @@ class GridWorker(QtCore.QObject):
         self.progress.emit(100)
         self.finished.emit(grid, xi_grid, yi_grid, px_x, px_y, x, y, z)
 
-class ScanTab(QtWidgets.QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.image_view = pg.ImageView()
-        self.image_view.ui.roiBtn.hide()
-        self.image_view.ui.menuBtn.hide()
-        self.image_view.ui.histogram.hide()
-        self.image_view.getView().setMenuEnabled(False)
-
-        self.hist_widget = pg.PlotWidget()
-        self.hist_widget.setMaximumHeight(120)  # Wąski pasek
-
-        # self.hist_min_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('b', width=2))
-        # self.hist_max_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('r', width=2))
-
-        # self.hist_min_line.sigPositionChanged.connect(self.on_hist_line_changed)
-        # self.hist_max_line.sigPositionChanged.connect(self.on_hist_line_changed)
-
-        # self.hist_widget.addItem(self.hist_min_line)
-        # self.hist_widget.addItem(self.hist_max_line)
-
-        hlayout = QtWidgets.QVBoxLayout(self)
-        hlayout.addWidget(self.image_view, stretch=1)
-        hlayout.addWidget(self.hist_widget)
-
-
-        # self.range_min_sb = QtWidgets.QDoubleSpinBox()
-        # self.range_max_sb = QtWidgets.QDoubleSpinBox()
-        # self.range_min_sb.setDecimals(2)
-        # self.range_max_sb.setDecimals(2)
-        # self.range_min_sb.setMaximum(1e9)
-        # self.range_max_sb.setMaximum(1e9)
-        # self.range_min_sb.setMinimum(-1e9)
-        # self.range_max_sb.setMinimum(-1e9)
-        # self.range_min_sb.setPrefix('Min: ')
-        # self.range_max_sb.setPrefix('Max: ')
-
-        # self.range_min_sb.valueChanged.connect(self.on_hist_range)
-        # self.range_max_sb.valueChanged.connect(self.on_hist_range)
-
-        # sb_layout = QtWidgets.QVBoxLayout()
-        # sb_layout.addWidget(self.range_min_sb)
-        # sb_layout.addWidget(self.range_max_sb)
-        # hlayout.addLayout(sb_layout)
-
-        self.setLayout(hlayout)
-
-
-        # layout = QtWidgets.QVBoxLayout(self)
-        # layout.addWidget(self.image_view)
-        # self.setLayout(layout)
-
-        self.zero_point_mode = False
-
-        self.seed_points = []
-        self.grid = None
-        self.xi = None
-        self.yi = None
-        self.px_x = None
-        self.px_y = None
-        self.orig_data = None
-
-        self.is_colormap = False
-        self.current_colormap = 'gray'  # lub None
-
-        self.zero_window_size = 7  # lub inna liczba nieparzysta
-        self.zero_sigma = 2.0      # ile odchyleń przyjmujesz jako "nie odstające"
-
-        self.image_view.getView().scene().sigMouseClicked.connect(self.mouse_clicked)
-
-    def on_hist_line_changed(self):
-        vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
-        vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
-        self.update_image(vmin, vmax)
-
-    # def on_hist_range(self):
-    #     self.update_image
-
-    # def update_histogram(self):
-    #     data = self.grid[~np.isnan(self.grid)]
-    #     y, x = np.histogram(data, bins=512)
-    #     self.hist_widget.clear()
-    #     self.hist_plot = self.hist_widget.plot(x, y, stepMode=True, fillLevel=0, brush=(150, 150, 150, 150))
-    #     if data.size > 0:
-    #         vmin = float(np.min(data))
-    #         vmax = float(np.max(data))
-
-    #         if not hasattr(self, 'hist_min_line'):
-    #             self.hist_min_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('b', width=2))
-    #             self.hist_widget.addItem(self.hist_min_line)
-    #             self.hist_min_line.setValue(vmin)
-    #             self.hist_min_line.sigPositionChanged.connect(self.on_hist_line_changed)
-    #         if not hasattr(self, 'hist_max_line'):
-    #             self.hist_max_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('r', width=2))
-    #             self.hist_widget.addItem(self.hist_max_line)
-    #             self.hist_max_line.setValue(vmax)
-    #             self.hist_max_line.sigPositionChanged.connect(self.on_hist_line_changed)
-
-    #         vmin = float(max(np.min(data),self.hist_min_line.value()))
-    #         vmax = float(min(np.max(data),self.hist_max_line.value()))
-
-    #         print(f"vmin: {vmin}, vmax: {vmax}")
-
-    #         self.hist_min_line.setValue(vmin)
-    #         self.hist_max_line.setValue(vmax)
-
-    def update_histogram(self):
-        if self.grid is None:
-            return
-        data = self.grid[~np.isnan(self.grid)]
-        if data.size == 0:
-            self.hist_widget.clear()
-            return
-
-        y, x = np.histogram(data, bins=512)
-        self.hist_widget.clear()
-        self.hist_plot = self.hist_widget.plot(x, y, stepMode=True, fillLevel=0, brush=(150, 150, 150, 150))
-
-        # Zapamiętaj stare pozycje (jeśli istnieją)
-        vmin = float(np.min(data))
-        vmax = float(np.max(data))
-        min_line_pos = getattr(self, 'hist_min_line', None)
-        max_line_pos = getattr(self, 'hist_max_line', None)
-        min_val = min_line_pos.value() if min_line_pos else vmin
-        max_val = max_line_pos.value() if max_line_pos else vmax
-
-        # Pozycje linii nie mogą wyjść poza nowe dane!
-        min_val = max(min_val, vmin)
-        max_val = min(max_val, vmax)
-
-        # Utwórz nowe linie
-        self.hist_min_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('b', width=2))
-        self.hist_max_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('r', width=2))
-        self.hist_widget.addItem(self.hist_min_line)
-        self.hist_widget.addItem(self.hist_max_line)
-        self.hist_min_line.setValue(min_val)
-        self.hist_max_line.setValue(max_val)
-        self.hist_min_line.sigPositionChanged.connect(self.on_hist_line_changed)
-        self.hist_max_line.sigPositionChanged.connect(self.on_hist_line_changed)
-
-
-
-    def set_zero_point_mode(self):
-        self.zero_point_mode = True
-        # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
-
-    def set_data(self, grid, xi, yi, px_x, px_y, x, y, z):
-        self.grid = grid
-        self.xi = xi
-        self.yi = yi
-        self.px_x = px_x
-        self.px_y = px_y
-        self.orig_data = (x, y, z)
-        self.update_image()
-        self.update_histogram()
-
-    def set_data_npz(self, data):
-        self.grid = data['grid']
-        self.xi = data['xi']
-        self.yi = data['yi']
-        self.px_x = data['px_x']
-        self.px_y = data['px_y']
-        if 'x_data' in data:
-            self.orig_data = (data['x_data'], data['y_data'], data['z_data'])
-        else:
-            self.orig_data = None
-        self.update_image()
-        self.update_histogram()
-
-    def save_as_mesh(self, grid, px_x=1.38, px_y=1.38):
-        v, f = grid_to_mesh_vectorized(grid, px_x, px_y)
-        mesh = trimesh.Trimesh(vertices=v, faces=f, process=False)
-        mesh.export("mesh_output.obj")
-
-
-    def save_file(self, parent=None):
-        if self.grid is None:
-            return
-        fname, nn = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz)")
-        print(nn)
-        if fname:
-            if fname.endswith(".npz"):
-                to_save = dict(grid=self.grid, xi=self.xi, yi=self.yi, px_x=self.px_x, px_y=self.px_y)
-                if self.orig_data:
-                    x, y, z = self.orig_data
-                    to_save.update(x_data=x, y_data=y, z_data=z)
-                np.savez(fname, **to_save)
-            elif fname.endswith(".obj"):
-                self.save_as_mesh(self.grid)
-
-    def flip_scan(self, parent=None):
-        if self.grid is None:
-            QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
-            return
-#        self.grid = np.flipud(self.grid)
-        self.grid = np.fliplr(self.grid)
-        self.grid = -self.grid
-        self.update_image()
-
-    def fill_holes(self, parent=None):
-        if self.grid is None: #or not self.seed_points:
-            QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
-            return
-
-        tst = np.isnan(self.grid)
-        for (iy, ix) in self.seed_points:
-            filled = flood(tst, seed_point=(iy, ix))
-            tst[filled] = False
-
-        grid_x, grid_y = np.meshgrid(self.xi, self.yi)
-        interp_points = np.column_stack((grid_x[tst], grid_y[tst]))
-
-        if self.orig_data:
-            x, y, z = self.orig_data
-            interp_values = griddata((x, y), z, interp_points, method='nearest')
-        else:
-            valid = ~np.isnan(self.grid)
-            interp_values = griddata(
-                (grid_x[valid], grid_y[valid]),
-                self.grid[valid],
-                interp_points,
-                method='nearest'
-            )
-        self.grid[tst] = interp_values
-        self.update_image()
-
-    def get_zero_point_value(self, x, y):
-        s = self.zero_window_size // 2
-        grid = self.grid
-        h, w = grid.shape
-        xmin = max(0, x - s)
-        xmax = min(w, x + s + 1)
-        ymin = max(0, y - s)
-        ymax = min(h, y + s + 1)
-        window = grid[ymin:ymax, xmin:xmax]
-
-        # Wartości bez NaN
-        vals = window[~np.isnan(window)]
-        if len(vals) == 0:
-            return np.nan
-
-        # Odrzuć odstające (np. 2 sigma od mediany)
-        median = np.median(vals)
-        std = np.std(vals)
-        non_outliers = vals[np.abs(vals - median) < self.zero_sigma * std]
-
-        # Jeżeli po odrzuceniu nie ma wartości – bierz medianę
-        if len(non_outliers) == 0:
-            return median
-        return np.mean(non_outliers)
-
-    def mouse_clicked(self, event):
-        if self.grid is None:
-            return
-        vb = self.image_view.getView()
-        mouse_point = vb.mapSceneToView(event.scenePos())
-        x = int(round(mouse_point.x()))
-        y = int(round(mouse_point.y()))
-        if 0 <= x < self.grid.shape[1] and 0 <= y < self.grid.shape[0]:
-            if self.zero_point_mode:
-                # value = self.grid[y, x]
-                value = self.get_zero_point_value(x, y)
-                if np.isnan(value):
-                    QtWidgets.QMessageBox.warning(self, "Brak danych", "Wybrany punkt nie zawiera wartości (NaN).")
-                    self.zero_point_mode = False
-                    return
-                # Przesuwamy cały skan w osi Z
-                self.grid = self.grid - value
-                self.update_image()
-                self.zero_point_mode = False
-                # QtWidgets.QMessageBox.information(self, "Sukces", f"Ustawiono nowy punkt zerowy na ({x},{y}) o wysokości {value:.2f}.")
-
-                min_val = self.hist_min_line.value()-value
-                max_val = self.hist_max_line.value()-value
-
-                self.update_histogram()
-                self.hist_min_line.setValue(min_val)
-                self.hist_max_line.setValue(max_val)
-                return
-            
-            if event.modifiers() & QtCore.Qt.ShiftModifier:
-                self.seed_points.append((y, x))
-                scatter = pg.ScatterPlotItem([x], [y], size=10, brush=pg.mkBrush('r'))
-                vb.addItem(scatter)
-
-    def toggle_colormap(self):
-        self.is_colormap = not self.is_colormap
-        self.update_image()
-
-    def update_image(self, vmin=None, vmax=None):
-        if self.grid is not None:
-            
-            if vmin is None or vmax is None:
-                if hasattr(self, 'hist_min_line') and hasattr(self, 'hist_max_line'):
-                    vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
-                    vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
-                else:
-                    vmin = float(np.min(self.grid))
-                    vmax = float(np.max(self.grid))
-
-            data = self.grid.T
-            masked = data.copy()
-            masked[(masked < vmin) | (masked > vmax)] = np.nan
-            if np.isnan(masked).all():
-                masked = np.zeros_like(masked)
-            image_item = self.image_view.getImageItem()
-            if self.is_colormap:
-                lut = pg.colormap.get('turbo').getLookupTable(0.0, 1.0, 256)
-                image_item.setLookupTable(lut)
-            else:
-                image_item.setLookupTable(None)
-            self.image_view.setImage(masked, autoLevels=True)
-        self.seed_points = []
-
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -439,8 +77,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         open_action = QtWidgets.QAction("Open...", self)
         open_action.triggered.connect(self.open_file)
-        save_action = QtWidgets.QAction("Save as...", self)
-        save_action.triggered.connect(self.save_file)
+
+        save_scan_action = QtWidgets.QAction("Save current scan as NPY...", self)
+        save_scan_action.triggered.connect(self.save_single_scan)
+
+        save_multi_action = QtWidgets.QAction("Save multiple scans...", self)
+        save_multi_action.triggered.connect(self.save_multiple_scans)
+
         fill_action = QtWidgets.QAction("Fill holes", self)
         fill_action.triggered.connect(self.fill_holes)
         flip_action = QtWidgets.QAction("Flip & reverse", self)
@@ -461,23 +104,27 @@ class MainWindow(QtWidgets.QMainWindow):
         colormap_action.setChecked(False)
         colormap_action.triggered.connect(self.toggle_colormap_current_tab)
 
-        # open_action.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogOpenButton))
-        # save_action.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton))
+        profile_action = QtWidgets.QAction("Profile analysis...", self)
+        profile_action.triggered.connect(self.start_profile_analysis)
 
-        open_action.setIcon(QIcon("icons/icons8-open-file-50.png"))
-        save_action.setIcon(QIcon("icons/icons8-save-50.png"))
+        open_action.setIcon(QIcon("icons/icons8-open-file1-50.png"))
+        save_scan_action.setIcon(QIcon("icons/icons8-save1-50.png"))
+        save_multi_action.setIcon(QIcon("icons/icons8-save2-50.png"))
         fill_action.setIcon(QIcon("icons/icons8-fill-color-50.png"))
         flip_action.setIcon(QIcon("icons/icons8-flip-48.png"))
         compare_action.setIcon(QIcon("icons/icons8-compare-50.png"))
         zero_action.setIcon(QIcon("icons/icons8-eyedropper-50.png"))
         about_action.setIcon(QIcon("icons/icons8-about-50.png"))
         exit_action.setIcon(QIcon("icons/icons8-exit-50.png"))
+        colormap_action.setIcon(QIcon("icons/icons8-color-palette-50.png"))
+        profile_action.setIcon(QIcon("icons/icons8-graph-50.png"))
 
 
         menubar = self.menuBar()
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(open_action)
-        file_menu.addAction(save_action)
+        file_menu.addAction(save_scan_action)
+        file_menu.addAction(save_multi_action)
 
         self.recent_menu = QtWidgets.QMenu("Recent files", self)
         file_menu.addMenu(self.recent_menu)
@@ -498,7 +145,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.toolbar = self.addToolBar("Tools")
         self.toolbar.addAction(open_action)
-        self.toolbar.addAction(save_action)
+        self.toolbar.addAction(save_scan_action)
+        self.toolbar.addAction(save_multi_action)
         self.toolbar.addSeparator()
         self.toolbar.addAction(fill_action)
         self.toolbar.addAction(flip_action)
@@ -506,6 +154,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addAction(colormap_action)
         self.toolbar.addSeparator()
         self.toolbar.addAction(compare_action)
+        self.toolbar.addAction(profile_action)
         self.toolbar.addSeparator()
         self.toolbar.addAction(about_action)
         self.toolbar.addAction(exit_action)
@@ -644,6 +293,112 @@ class MainWindow(QtWidgets.QMainWindow):
         if tab:
             tab.save_file(self)
 
+    def save_single_scan(self):
+        tab = self.current_tab()
+        if not tab or not hasattr(tab, "grid") or tab.grid is None:
+            QtWidgets.QMessageBox.warning(self, "No data", "No scan in current tab.")
+            return
+        fname, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save as NPY", "", "NPY (*.npy)")
+        if not fname:
+            return
+        try:
+            np.save(fname, tab.grid)
+            QtWidgets.QMessageBox.information(self, "Saved", f"Scan saved to: {fname}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Error while saving:\n{e}")
+
+    def save_multiple_scans(self):
+        if self.tabs.count() == 0:
+            QtWidgets.QMessageBox.warning(self, "No scans", "No scan tabs are open.")
+            return
+
+        # --- 1. Dialog wyboru skanów i nazw ---
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Save selected scans")
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.addWidget(QtWidgets.QLabel("Select scans to save and specify dataset names:"))
+
+        checkboxes = []
+        lineedits = []
+        for i in range(self.tabs.count()):
+            row = QtWidgets.QHBoxLayout()
+            cb = QtWidgets.QCheckBox(self.tabs.tabText(i))
+            cb.setChecked(True)
+            le = QtWidgets.QLineEdit(self.tabs.tabText(i).replace(" ", "_"))
+            row.addWidget(cb)
+            row.addWidget(le)
+            layout.addLayout(row)
+            checkboxes.append(cb)
+            lineedits.append(le)
+
+        layout.addWidget(QtWidgets.QLabel("Select file format:"))
+        format_combo = QtWidgets.QComboBox()
+        format_combo.addItems(["NPZ (compressed)", "HDF5"])
+        layout.addWidget(format_combo)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        layout.addWidget(buttons)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        # --- 2. Zbieranie wyboru ---
+        to_save = []
+        for i, cb in enumerate(checkboxes):
+            if cb.isChecked():
+                dataset_name = lineedits[i].text().strip()
+                if not dataset_name:
+                    QtWidgets.QMessageBox.warning(self, "Invalid name", "Each scan must have a dataset name!")
+                    return
+                tab = self.tabs.widget(i)
+                if not hasattr(tab, "grid") or tab.grid is None:
+                    QtWidgets.QMessageBox.warning(self, "No data", f"Tab '{cb.text()}' has no scan data.")
+                    return
+                to_save.append((dataset_name, tab.grid))
+
+        if not to_save:
+            QtWidgets.QMessageBox.warning(self, "Nothing to save", "No scans selected.")
+            return
+
+        # --- 3. Zapytaj o plik docelowy ---
+        fmt = format_combo.currentText()
+        if fmt.startswith("NPZ"):
+            fname, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Save as NPZ", "", "NPZ (*.npz)")
+            if not fname:
+                return
+            try:
+                np.savez_compressed(fname, **{name: grid for name, grid in to_save})
+                QtWidgets.QMessageBox.information(self, "Saved", f"Scans saved to: {fname}")
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Error", f"Error while saving:\n{e}")
+
+        else:  # HDF5
+            fname, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Save as HDF5", "", "HDF5 (*.h5)")
+            if not fname:
+                return
+            import h5py
+            try:
+                with h5py.File(fname, "a") as f:
+                    for name, grid in to_save:
+                        if name in f:
+                            msg = QtWidgets.QMessageBox.question(
+                                self, "Dataset exists",
+                                f"Dataset '{name}' already exists.\nOverwrite?",
+                                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                            )
+                            if msg != QtWidgets.QMessageBox.Yes:
+                                continue
+                            del f[name]
+                        f.create_dataset(name, data=grid)
+                QtWidgets.QMessageBox.information(self, "Saved", f"Scans saved to: {fname}")
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Error", f"Error while saving:\n{e}")
+
     def flip_scan(self):
         tab = self.current_tab()
         if tab:
@@ -658,6 +413,29 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.tabs.count() < 2:
             QtWidgets.QMessageBox.warning(self, "Za mało skanów", "Musisz mieć przynajmniej 2 skany!")
             return
+
+        def receive_aligned_grids(scan1_aligned, scan2_aligned):
+            print(f"scan1: {scan1_aligned.shape}, scan2: {scan2_aligned.shape}")
+            # popup: nadpisać czy dodać nowe zakładki?
+            msg = QtWidgets.QMessageBox(self)
+            msg.setWindowTitle("Dopasowanie skanów")
+            msg.setText("Jak chcesz zapisać dopasowanie?")
+            btn1 = msg.addButton("Jako nowe zakładki", QtWidgets.QMessageBox.AcceptRole)
+            btn2 = msg.addButton("Nadpisz istniejące", QtWidgets.QMessageBox.ActionRole)
+            msg.addButton("Anuluj", QtWidgets.QMessageBox.RejectRole)
+            msg.exec_()
+            if msg.clickedButton() == btn1:
+                tab1 = ScanTab()
+                tab2 = ScanTab()
+                tab1.set_data(scan1_aligned, tab1.xi, tab1.yi, tab1.px_x, tab1.px_y, None, None, None)
+                tab2.set_data(scan2_aligned, tab2.xi, tab2.yi, tab2.px_x, tab2.px_y, None, None, None)
+                self.tabs.addTab(tab1, "Dopasowany ref")
+                self.tabs.addTab(tab2, "Dopasowany scan2")
+            elif msg.clickedButton() == btn2:
+                current_tab = self.tabs.currentWidget()
+                if isinstance(current_tab, ScanTab):
+                    current_tab.set_data(scan2_aligned, current_tab.xi, current_tab.yi, current_tab.px_x, current_tab.px_y, None, None, None)
+            # jeśli "Anuluj", nie rób nic
 
         # Dialog wyboru zakładek
         dialog = QtWidgets.QDialog(self)
@@ -702,10 +480,91 @@ class MainWindow(QtWidgets.QMainWindow):
         grid2 = tab2.grid
 
         # --- Tu otwieramy okno narzędzia różnicowego ---
-        self.viewer = OverlayViewer(grid1, grid2)
+        self.viewer = OverlayViewer(grid1, grid2, on_accept=receive_aligned_grids)
         self.viewer.setWindowTitle(f"Porównanie: {names[idx1]} vs {names[idx2]}")
         self.viewer.show()
 
+    def start_profile_analysis(self):
+        if self.tabs.count() < 2:
+            QtWidgets.QMessageBox.warning(self, "Za mało skanów", "Musisz mieć co najmniej dwa skany!")
+            return
+
+        # Dialog wyboru dwóch zakładek
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Wybierz skany do analizy profilu")
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.addWidget(QtWidgets.QLabel("Wybierz dwa skany:"))
+        cb1 = QtWidgets.QComboBox()
+        cb2 = QtWidgets.QComboBox()
+        names = [self.tabs.tabText(i) for i in range(self.tabs.count())]
+        cb1.addItems(names)
+        cb2.addItems(names)
+        layout.addWidget(QtWidgets.QLabel("Referencyjny skan:"))
+        layout.addWidget(cb1)
+        layout.addWidget(QtWidgets.QLabel("Skan do porównania:"))
+        layout.addWidget(cb2)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        layout.addWidget(buttons)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        idx1 = cb1.currentIndex()
+        idx2 = cb2.currentIndex()
+        if idx1 == idx2:
+            QtWidgets.QMessageBox.warning(self, "Błąd", "Wybierz dwa różne skany!")
+            return
+
+        grid1 = self.tabs.widget(idx1).grid
+        grid2 = self.tabs.widget(idx2).grid
+
+        # Sprawdzenie rozmiarów
+        if grid1.shape != grid2.shape:
+            # Minimalny wspólny rozmiar
+            h = min(grid1.shape[0], grid2.shape[0])
+            w = min(grid1.shape[1], grid2.shape[1])
+            reply = QtWidgets.QMessageBox.question(
+                self, "Różne rozmiary",
+                f"Skany mają różne rozmiary:\n"
+                f"{grid1.shape} vs {grid2.shape}\n"
+                f"Przyciąć oba do wspólnego obszaru {h}x{w} i kontynuować?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
+            grid1 = grid1[:h, :w]
+            grid2 = grid2[:h, :w]
+
+        # --- Uruchom ProfileViewer z przekazaniem danych ---
+        # Możesz tu dynamicznie zaimportować profilViewer lub mieć własny wrapper:
+        from profileViewer import ProfileViewer
+        viewer = ProfileViewer()
+        viewer.reference_grid = grid1
+        viewer.adjusted_grid = grid2
+        # wygładzone wersje na początek
+        from scipy.ndimage import gaussian_filter
+        sigma = 5.0  # możesz dodać pole wyboru
+        viewer.reference_grid_smooth = gaussian_filter(grid1, sigma)
+        viewer.adjusted_grid_smooth = gaussian_filter(grid2, sigma)
+        # maska wspólna
+        viewer.valid_mask = ~np.isnan(viewer.reference_grid_smooth) & ~np.isnan(viewer.adjusted_grid_smooth)
+        # domyślna korekcja
+        viewer.adjusted_grid_corrected = viewer.adjusted_grid_smooth + np.nanmean(viewer.reference_grid_smooth - viewer.adjusted_grid_smooth)
+        # skopiuj też metadane, jeśli masz w ScanTab
+        if hasattr(self.tabs.widget(idx1), "metadata"):
+            viewer.metadata = self.tabs.widget(idx1).metadata
+        # dokończ GUI i pokaż
+        viewer.show()
+        viewer.on_worker_finished({
+            "reference_grid": grid1,
+            "adjusted_grid": grid2,
+            "reference_grid_smooth": viewer.reference_grid_smooth,
+            "adjusted_grid_smooth": viewer.adjusted_grid_smooth,
+            "valid_mask": viewer.valid_mask,
+            "adjusted_grid_corrected": viewer.adjusted_grid_corrected,
+        })
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)

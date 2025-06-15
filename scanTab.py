@@ -1,0 +1,301 @@
+import numpy as np
+from PyQt5 import QtWidgets, QtCore
+import pyqtgraph as pg
+from skimage.segmentation import flood
+from scipy.interpolate import griddata
+import trimesh
+
+class ScanTab(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.image_view = pg.ImageView()
+        self.image_view.ui.roiBtn.hide()
+        self.image_view.ui.menuBtn.hide()
+        self.image_view.ui.histogram.hide()
+        self.image_view.getView().setMenuEnabled(False)
+
+        self.hist_widget = pg.PlotWidget()
+        self.hist_widget.setMaximumHeight(120)  # Wąski pasek
+
+        hlayout = QtWidgets.QVBoxLayout(self)
+        hlayout.addWidget(self.image_view, stretch=1)
+        hlayout.addWidget(self.hist_widget)
+
+        self.setLayout(hlayout)
+
+        self.zero_point_mode = False
+
+        self.seed_points = []
+        self.grid = None
+        self.xi = None
+        self.yi = None
+        self.px_x = None
+        self.px_y = None
+        self.orig_data = None
+
+        self.is_colormap = False
+        self.current_colormap = 'gray'  # lub None
+
+        self.zero_window_size = 7  # lub inna liczba nieparzysta
+        self.zero_sigma = 2.0      # ile odchyleń przyjmujesz jako "nie odstające"
+
+        self.image_view.getView().scene().sigMouseClicked.connect(self.mouse_clicked)
+
+    def on_hist_line_changed(self):
+        vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
+        vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
+        self.update_image(vmin, vmax)
+
+
+    def update_histogram(self):
+        if self.grid is None:
+            return
+        data = self.grid[~np.isnan(self.grid)]
+        if data.size == 0:
+            self.hist_widget.clear()
+            return
+
+        y, x = np.histogram(data, bins=512)
+        self.hist_widget.clear()
+        self.hist_plot = self.hist_widget.plot(x, y, stepMode=True, fillLevel=0, brush=(150, 150, 150, 150))
+
+        # Zapamiętaj stare pozycje (jeśli istnieją)
+        vmin = float(np.min(data))
+        vmax = float(np.max(data))
+        min_line_pos = getattr(self, 'hist_min_line', None)
+        max_line_pos = getattr(self, 'hist_max_line', None)
+        min_val = min_line_pos.value() if min_line_pos else vmin
+        max_val = max_line_pos.value() if max_line_pos else vmax
+
+        # Pozycje linii nie mogą wyjść poza nowe dane!
+        min_val = max(min_val, vmin)
+        max_val = min(max_val, vmax)
+
+        # Utwórz nowe linie
+        self.hist_min_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('b', width=2))
+        self.hist_max_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('r', width=2))
+        self.hist_widget.addItem(self.hist_min_line)
+        self.hist_widget.addItem(self.hist_max_line)
+        self.hist_min_line.setValue(min_val)
+        self.hist_max_line.setValue(max_val)
+        self.hist_min_line.sigPositionChanged.connect(self.on_hist_line_changed)
+        self.hist_max_line.sigPositionChanged.connect(self.on_hist_line_changed)
+
+
+
+    def set_zero_point_mode(self):
+        self.zero_point_mode = True
+        # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
+
+    def set_data(self, grid, xi, yi, px_x, px_y, x, y, z):
+        self.grid = grid
+        self.xi = xi
+        self.yi = yi
+        self.px_x = px_x
+        self.px_y = px_y
+        self.orig_data = (x, y, z)
+        self.update_image()
+        self.update_histogram()
+
+    def set_data_npz(self, data):
+        self.grid = data['grid']
+        self.xi = data['xi']
+        self.yi = data['yi']
+        self.px_x = data['px_x']
+        self.px_y = data['px_y']
+        if 'x_data' in data:
+            self.orig_data = (data['x_data'], data['y_data'], data['z_data'])
+        else:
+            self.orig_data = None
+        self.update_image()
+        self.update_histogram()
+
+    def grid_to_mesh_vectorized(self, grid, pixel_size_x=1.0, pixel_size_y=1.0):
+        h, w = grid.shape
+
+        # Siatka XY
+        y_indices, x_indices = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+        x_coords = x_indices * pixel_size_x
+        y_coords = y_indices * pixel_size_y
+        z_coords = grid
+
+        # Wszystkie wierzchołki
+        vertices = np.stack([x_coords, y_coords, z_coords], axis=-1).reshape(-1, 3)
+
+        # Maska ważnych punktów (nie NaN)
+        valid_mask = ~np.isnan(vertices[:, 2])
+        index_map = -np.ones(h * w, dtype=int)
+        index_map[valid_mask] = np.arange(np.count_nonzero(valid_mask))
+
+        # Indeksy trójkątów
+        idx_tl = np.ravel_multi_index((np.arange(h - 1)[:, None], np.arange(w - 1)[None, :]), dims=(h, w))
+        idx_tr = idx_tl + 1
+        idx_bl = idx_tl + w
+        idx_br = idx_bl + 1
+
+        # Spłaszczone i połączone
+        idx_tl = idx_tl.ravel()
+        idx_tr = idx_tr.ravel()
+        idx_bl = idx_bl.ravel()
+        idx_br = idx_br.ravel()
+
+        # Tylko tam, gdzie wszystkie 4 są ważne
+        valid_quad = (index_map[idx_tl] >= 0) & (index_map[idx_tr] >= 0) & \
+                    (index_map[idx_bl] >= 0) & (index_map[idx_br] >= 0)
+
+        # Dwa trójkąty na każdy kwadrat
+        faces_a = np.stack([index_map[idx_tl], index_map[idx_tr], index_map[idx_br]], axis=1)[valid_quad]
+        faces_b = np.stack([index_map[idx_tl], index_map[idx_br], index_map[idx_bl]], axis=1)[valid_quad]
+        faces = np.vstack([faces_a, faces_b])
+
+        # Przefiltrowane wierzchołki
+        vertices = vertices[valid_mask]
+
+        return vertices.astype(np.float32), faces.astype(np.int32)
+
+
+    def save_as_mesh(self, grid, px_x=1.38, px_y=1.38):
+        v, f = self.grid_to_mesh_vectorized(grid, px_x, px_y)
+        mesh = trimesh.Trimesh(vertices=v, faces=f, process=False)
+        mesh.export("mesh_output.obj")
+
+
+    def save_file(self, parent=None):
+        if self.grid is None:
+            return
+        fname, nn = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz)")
+        print(nn)
+        if fname:
+            if fname.endswith(".npz"):
+                to_save = dict(grid=self.grid, xi=self.xi, yi=self.yi, px_x=self.px_x, px_y=self.px_y)
+                if self.orig_data:
+                    x, y, z = self.orig_data
+                    to_save.update(x_data=x, y_data=y, z_data=z)
+                np.savez(fname, **to_save)
+            elif fname.endswith(".obj"):
+                self.save_as_mesh(self.grid)
+
+    def flip_scan(self, parent=None):
+        if self.grid is None:
+            QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
+            return
+#        self.grid = np.flipud(self.grid)
+        self.grid = np.fliplr(self.grid)
+        self.grid = -self.grid
+        self.update_image()
+
+    def fill_holes(self, parent=None):
+        if self.grid is None: #or not self.seed_points:
+            QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
+            return
+
+        tst = np.isnan(self.grid)
+        for (iy, ix) in self.seed_points:
+            filled = flood(tst, seed_point=(iy, ix))
+            tst[filled] = False
+
+        grid_x, grid_y = np.meshgrid(self.xi, self.yi)
+        interp_points = np.column_stack((grid_x[tst], grid_y[tst]))
+
+        if self.orig_data:
+            x, y, z = self.orig_data
+            interp_values = griddata((x, y), z, interp_points, method='nearest')
+        else:
+            valid = ~np.isnan(self.grid)
+            interp_values = griddata(
+                (grid_x[valid], grid_y[valid]),
+                self.grid[valid],
+                interp_points,
+                method='nearest'
+            )
+        self.grid[tst] = interp_values
+        self.update_image()
+
+    def get_zero_point_value(self, x, y):
+        s = self.zero_window_size // 2
+        grid = self.grid
+        h, w = grid.shape
+        xmin = max(0, x - s)
+        xmax = min(w, x + s + 1)
+        ymin = max(0, y - s)
+        ymax = min(h, y + s + 1)
+        window = grid[ymin:ymax, xmin:xmax]
+
+        # Wartości bez NaN
+        vals = window[~np.isnan(window)]
+        if len(vals) == 0:
+            return np.nan
+
+        # Odrzuć odstające (np. 2 sigma od mediany)
+        median = np.median(vals)
+        std = np.std(vals)
+        non_outliers = vals[np.abs(vals - median) < self.zero_sigma * std]
+
+        # Jeżeli po odrzuceniu nie ma wartości – bierz medianę
+        if len(non_outliers) == 0:
+            return median
+        return np.mean(non_outliers)
+
+    def mouse_clicked(self, event):
+        if self.grid is None:
+            return
+        vb = self.image_view.getView()
+        mouse_point = vb.mapSceneToView(event.scenePos())
+        x = int(round(mouse_point.x()))
+        y = int(round(mouse_point.y()))
+        if 0 <= x < self.grid.shape[1] and 0 <= y < self.grid.shape[0]:
+            if self.zero_point_mode:
+                # value = self.grid[y, x]
+                value = self.get_zero_point_value(x, y)
+                if np.isnan(value):
+                    QtWidgets.QMessageBox.warning(self, "Brak danych", "Wybrany punkt nie zawiera wartości (NaN).")
+                    self.zero_point_mode = False
+                    return
+                # Przesuwamy cały skan w osi Z
+                self.grid = self.grid - value
+                self.update_image()
+                self.zero_point_mode = False
+                # QtWidgets.QMessageBox.information(self, "Sukces", f"Ustawiono nowy punkt zerowy na ({x},{y}) o wysokości {value:.2f}.")
+
+                min_val = self.hist_min_line.value()-value
+                max_val = self.hist_max_line.value()-value
+
+                self.update_histogram()
+                self.hist_min_line.setValue(min_val)
+                self.hist_max_line.setValue(max_val)
+                return
+            
+            if event.modifiers() & QtCore.Qt.ShiftModifier:
+                self.seed_points.append((y, x))
+                scatter = pg.ScatterPlotItem([x], [y], size=10, brush=pg.mkBrush('r'))
+                vb.addItem(scatter)
+
+    def toggle_colormap(self):
+        self.is_colormap = not self.is_colormap
+        self.update_image()
+
+    def update_image(self, vmin=None, vmax=None):
+        if self.grid is not None:
+            
+            if vmin is None or vmax is None:
+                if hasattr(self, 'hist_min_line') and hasattr(self, 'hist_max_line'):
+                    vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
+                    vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
+                else:
+                    vmin = float(np.min(self.grid))
+                    vmax = float(np.max(self.grid))
+
+            data = self.grid.T
+            masked = data.copy()
+            masked[(masked < vmin) | (masked > vmax)] = np.nan
+            if np.isnan(masked).all():
+                masked = np.zeros_like(masked)
+            image_item = self.image_view.getImageItem()
+            if self.is_colormap:
+                lut = pg.colormap.get('turbo').getLookupTable(0.0, 1.0, 256)
+                image_item.setLookupTable(lut)
+            else:
+                image_item.setLookupTable(None)
+            self.image_view.setImage(masked, autoLevels=True, autoRange=False)
+        self.seed_points = []
+

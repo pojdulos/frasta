@@ -1,15 +1,15 @@
 import sys
 import os
 import numpy as np
-import h5py
+# import h5py
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
-from scipy.ndimage import gaussian_filter
+# from scipy.ndimage import gaussian_filter
 from skimage.draw import line
 from sklearn.linear_model import LinearRegression
 from PyQt5.QtCore import QPointF
 from math import atan, degrees
-import pyqtgraph.opengl as gl
+# import pyqtgraph.opengl as gl
 
 from profile3DWindow import Profile3DWindow
 #from pixelSnapViewBox import SnapImageWidget
@@ -82,7 +82,7 @@ def resource_path(relative_path):
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-class ProfilWorker(QThread):
+class ProfileWorker(QThread):
     # Sygnały (możesz dodać więcej, np. postęp)
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -124,7 +124,7 @@ class ProfilWorker(QThread):
 
 
 
-class ProfilViewer(QtWidgets.QMainWindow):
+class ProfileViewer(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Interactive cross-sectional analysis")
@@ -223,11 +223,6 @@ class ProfilViewer(QtWidgets.QMainWindow):
         layout.addLayout(center_layout)
         layout.addLayout(right_layout)
 
-        # Pozostałe pola/zmienne
-        # height, width = self.reference_grid_smooth.shape
-        # self.x1, self.y1 = 0, 0
-        # self.x2, self.y2 = width - 1, height - 1
-
         self.line_drag_active = False
         self.line_drag_which = None  # "start" albo "end"
 
@@ -248,19 +243,6 @@ class ProfilViewer(QtWidgets.QMainWindow):
 
         # self.statusBar().showMessage("Gotowy")
 
-        # W __init__, po ustawieniu status/progress_bar, itp:
-        self.statusBar().showMessage("Wczytywanie danych...")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)
-        QtWidgets.QApplication.processEvents()
-        self.worker = ProfilWorker(resource_path("source_data/moj_test_aligned.h5"), self.sigma, self.metadata)
-        self.worker.finished.connect(self.on_worker_finished)
-        self.worker.error.connect(self.on_worker_error)
-
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-        self.centralWidget().setEnabled(False)
-        self.open_action.setEnabled(False)
-        self.worker.start()
 
     def show_preview(self, fragment, title="Podgląd wycinka"):
         if getattr(self, "_preview_win", None) is None:
@@ -463,7 +445,7 @@ class ProfilViewer(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Wczytywanie danych...")
             self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 0)
-            self.worker = ProfilWorker(fname, self.sigma, self.metadata)
+            self.worker = ProfileWorker(fname, self.sigma, self.metadata)
             self.worker.finished.connect(self.on_worker_finished)
             self.worker.error.connect(self.on_worker_error)
             self.worker.start()
@@ -506,12 +488,6 @@ class ProfilViewer(QtWidgets.QMainWindow):
         shape = self.update_plot()
 
         self.resize_image_view(shape)
-
-        # aspect = shape[0]/shape[1]
-        # div = (shape[1] // 500) if (aspect <= 1.0) else (aspect*shape[1] // 500)
-        # self.image_view.setFixedSize(shape[1]//div,shape[0]//div)
-        # self.image_view.update()
-        # self.updateGeometry()
 
         vb = self.image_view.getView()
         vb.setAspectLocked(True)
@@ -773,8 +749,23 @@ class ProfilViewer(QtWidgets.QMainWindow):
                     view.removeItem(self.image_marker)
                     self.image_marker = None
 
+    def load_data_from_file(self, fname):
+        self.statusBar().showMessage("Wczytywanie danych...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.worker = ProfileWorker(fname, self.sigma, self.metadata)
+        self.worker.finished.connect(self.on_worker_finished)
+        self.worker.error.connect(self.on_worker_error)
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        self.centralWidget().setEnabled(False)
+        self.open_action.setEnabled(False)
+        self.worker.start()
+
+
+
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])
-    viewer = ProfilViewer()
+    viewer = ProfileViewer()
+    viewer.load_data_from_file("source_data/moj_test_aligned.h5")
     viewer.show()
     sys.exit(app.exec_())
