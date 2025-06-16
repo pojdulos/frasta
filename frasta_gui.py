@@ -10,7 +10,7 @@ from scanTab import ScanTab
 
 class GridWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
-    finished = QtCore.pyqtSignal(object, object, object, float, float, object, object, object)  # grid, xi, yi, px_x, px_y, x, y, z
+    finished = QtCore.pyqtSignal(object, object, object, float, float) #, object, object, object)  # grid, xi, yi, px_x, px_y, x, y, z
 
     def __init__(self, fname):
         super().__init__()
@@ -31,14 +31,13 @@ class GridWorker(QtCore.QObject):
         dy = np.diff(np.sort(np.unique(y)))
         px_x = np.median(dx[dx > 0]).round(2)
         px_y = np.median(dy[dy > 0]).round(2)
-        px_x, px_y = 1.38, 1.38
 
         x_min, x_max = x.min(), x.max()
         y_min, y_max = y.min(), y.max()
         grid_size_x = int((x_max - x_min) / px_x) + 1
         grid_size_y = int((y_max - y_min) / px_y) + 1
 
-        grid = np.full((grid_size_y, grid_size_x), np.nan, dtype=np.float32)
+        grid = np.full((grid_size_y, grid_size_x), np.nan, dtype=np.float64)
         counts = np.zeros_like(grid, dtype=np.int32)
         N = len(x)
         for idx, (xi, yi, zi) in enumerate(zip(x, y, z)):
@@ -58,8 +57,7 @@ class GridWorker(QtCore.QObject):
         xi_grid = np.linspace(x_min, x_max, grid_size_x)
         yi_grid = np.linspace(y_min, y_max, grid_size_y)
         self.progress.emit(100)
-        self.finished.emit(grid, xi_grid, yi_grid, px_x, px_y, x, y, z)
-
+        self.finished.emit(grid, xi_grid, yi_grid, px_x, px_y) #, x, y, z)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -75,92 +73,101 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs = QtWidgets.QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        open_action = QtWidgets.QAction("Open...", self)
-        open_action.triggered.connect(self.open_file)
+        self.create_actions()
+        self.connect_actions()
+        self.create_menubar()
+        self.create_toolbar()
 
-        save_scan_action = QtWidgets.QAction("Save current scan as NPY...", self)
-        save_scan_action.triggered.connect(self.save_single_scan)
+        self.worker = None
+        self.thread = None
 
-        save_multi_action = QtWidgets.QAction("Save multiple scans...", self)
-        save_multi_action.triggered.connect(self.save_multiple_scans)
-
-        fill_action = QtWidgets.QAction("Fill holes", self)
-        fill_action.triggered.connect(self.fill_holes)
-        flip_action = QtWidgets.QAction("Flip & reverse", self)
-        flip_action.triggered.connect(self.flip_scan)
-        compare_action = QtWidgets.QAction("Porównaj skany...", self)
-        compare_action.triggered.connect(self.compare_scans)
-        zero_action = QtWidgets.QAction("Ustaw punkt zerowy", self)
-        zero_action.triggered.connect(self.set_zero_point_mode)
-
-        about_action = QtWidgets.QAction("About...", self)
-        about_action.triggered.connect(self.show_about_dialog)
-
-        exit_action = QtWidgets.QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
-
-        colormap_action = QtWidgets.QAction("Toggle colormap", self)
-        colormap_action.setCheckable(True)
-        colormap_action.setChecked(False)
-        colormap_action.triggered.connect(self.toggle_colormap_current_tab)
-
-        profile_action = QtWidgets.QAction("Profile analysis...", self)
-        profile_action.triggered.connect(self.start_profile_analysis)
-
-        open_action.setIcon(QIcon("icons/icons8-open-file1-50.png"))
-        save_scan_action.setIcon(QIcon("icons/icons8-save1-50.png"))
-        save_multi_action.setIcon(QIcon("icons/icons8-save2-50.png"))
-        fill_action.setIcon(QIcon("icons/icons8-fill-color-50.png"))
-        flip_action.setIcon(QIcon("icons/icons8-flip-48.png"))
-        compare_action.setIcon(QIcon("icons/icons8-compare-50.png"))
-        zero_action.setIcon(QIcon("icons/icons8-eyedropper-50.png"))
-        about_action.setIcon(QIcon("icons/icons8-about-50.png"))
-        exit_action.setIcon(QIcon("icons/icons8-exit-50.png"))
-        colormap_action.setIcon(QIcon("icons/icons8-color-palette-50.png"))
-        profile_action.setIcon(QIcon("icons/icons8-graph-50.png"))
+    def create_actions(self):
+        self.actions = { 
+            "open": QtWidgets.QAction("Open...", self),
+            "save_scan": QtWidgets.QAction("Save current scan...", self),
+            "save_multi": QtWidgets.QAction("Save multiple scans...", self),
+            "fill": QtWidgets.QAction("Fill holes", self),
+            "flip": QtWidgets.QAction("Flip & reverse", self),
+            "zero": QtWidgets.QAction("Set zero point", self),
+            "colormap": QtWidgets.QAction("Toggle colormap", self),
+            "compare": QtWidgets.QAction("Scan positioning...", self),
+            "profile": QtWidgets.QAction("Profile analysis...", self),
+            "about": QtWidgets.QAction("About...", self),
+            "exit": QtWidgets.QAction("Exit", self),
+        }
 
 
+        self.actions["open"].setIcon(QIcon("icons/icons8-open-file1-50.png"))
+        self.actions["save_scan"].setIcon(QIcon("icons/icons8-save1-50.png"))
+        self.actions["save_multi"].setIcon(QIcon("icons/icons8-save2-50.png"))
+        self.actions["fill"].setIcon(QIcon("icons/icons8-fill-color-50.png"))
+        self.actions["flip"].setIcon(QIcon("icons/icons8-flip-48.png"))
+        self.actions["zero"].setIcon(QIcon("icons/icons8-eyedropper-50.png"))
+        self.actions["colormap"].setIcon(QIcon("icons/icons8-color-palette-50.png"))
+        self.actions["compare"].setIcon(QIcon("icons/icons8-compare-50.png"))
+        self.actions["profile"].setIcon(QIcon("icons/icons8-graph-50.png"))
+        self.actions["about"].setIcon(QIcon("icons/icons8-about-50.png"))
+        self.actions["exit"].setIcon(QIcon("icons/icons8-exit-50.png"))
+
+        self.actions["colormap"].setCheckable(True)
+        self.actions["colormap"].setChecked(False)
+
+    def connect_actions(self):
+        self.actions["open"].triggered.connect(self.open_file)
+        self.actions["save_scan"].triggered.connect(self.save_single_scan)
+        self.actions["save_multi"].triggered.connect(self.save_multiple_scans)
+        self.actions["fill"].triggered.connect(self.fill_holes)
+        self.actions["flip"].triggered.connect(self.flip_scan)
+        self.actions["zero"].triggered.connect(self.set_zero_point_mode)
+        self.actions["colormap"].triggered.connect(self.toggle_colormap_current_tab)
+        self.actions["compare"].triggered.connect(self.compare_scans)
+        self.actions["profile"].triggered.connect(self.start_profile_analysis)
+        self.actions["about"].triggered.connect(self.show_about_dialog)
+        self.actions["exit"].triggered.connect(self.close)
+
+    def create_menubar(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("&File")
-        file_menu.addAction(open_action)
-        file_menu.addAction(save_scan_action)
-        file_menu.addAction(save_multi_action)
+        file_menu.addAction(self.actions["open"])
+        file_menu.addAction(self.actions["save_scan"])
+        file_menu.addAction(self.actions["save_multi"])
 
         self.recent_menu = QtWidgets.QMenu("Recent files", self)
         file_menu.addMenu(self.recent_menu)
         self.update_recent_files_menu()
 
-        file_menu.addAction(exit_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self.actions["exit"])
         
+        actions_menu = menubar.addMenu("Scan &Actions")
+        actions_menu.addAction(self.actions["fill"])
+        actions_menu.addAction(self.actions["flip"])
+        actions_menu.addAction(self.actions["zero"])
+        actions_menu.addAction(self.actions["colormap"])
 
+        tools_menu = menubar.addMenu("&Tools")
+        tools_menu.addAction(self.actions["compare"])
+        tools_menu.addAction(self.actions["profile"])
 
-        actions_menu = menubar.addMenu("&Actions")
-        actions_menu.addAction(fill_action)
-        actions_menu.addAction(flip_action)
-        actions_menu.addAction(compare_action)
-        actions_menu.addAction(zero_action)
+        help_menu = menubar.addMenu("&Help")
+        help_menu.addAction(self.actions["about"])
 
-        help_menu = self.menuBar().addMenu("&Help")
-        help_menu.addAction(about_action)
-
+    def create_toolbar(self):
         self.toolbar = self.addToolBar("Tools")
-        self.toolbar.addAction(open_action)
-        self.toolbar.addAction(save_scan_action)
-        self.toolbar.addAction(save_multi_action)
+        self.toolbar.addAction(self.actions["open"])
+        self.toolbar.addAction(self.actions["save_scan"])
+        self.toolbar.addAction(self.actions["save_multi"])
         self.toolbar.addSeparator()
-        self.toolbar.addAction(fill_action)
-        self.toolbar.addAction(flip_action)
-        self.toolbar.addAction(zero_action)
-        self.toolbar.addAction(colormap_action)
+        self.toolbar.addAction(self.actions["fill"])
+        self.toolbar.addAction(self.actions["flip"])
+        self.toolbar.addAction(self.actions["zero"])
+        self.toolbar.addAction(self.actions["colormap"])
         self.toolbar.addSeparator()
-        self.toolbar.addAction(compare_action)
-        self.toolbar.addAction(profile_action)
+        self.toolbar.addAction(self.actions["compare"])
+        self.toolbar.addAction(self.actions["profile"])
         self.toolbar.addSeparator()
-        self.toolbar.addAction(about_action)
-        self.toolbar.addAction(exit_action)
-
-        self.worker = None
-        self.thread = None
+        self.toolbar.addAction(self.actions["about"])
+        self.toolbar.addAction(self.actions["exit"])
 
     def toggle_colormap_current_tab(self):
         tab = self.current_tab()
@@ -173,7 +180,6 @@ class MainWindow(QtWidgets.QMainWindow):
             tab.set_zero_point_mode()
 
     def show_about_dialog(self):
-        print("About")
         dlg = AboutDialog(self)
         dlg.exec_()
 
@@ -210,42 +216,52 @@ class MainWindow(QtWidgets.QMainWindow):
         tab = self.tabs.currentWidget()
         return tab
 
-    def open_file(self):
-        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open file", "", "CSV, NPY, NPZ (*.csv *.dat *.npy *.npz)")
-        if not fname:
-            return
+    def load_csv(self, fname, tab):
+        dlg = QtWidgets.QProgressDialog("Wczytywanie i gridowanie...", None, 0, 100, self)
+        dlg.setWindowModality(QtCore.Qt.ApplicationModal)
+        dlg.setAutoClose(True)
+        dlg.setCancelButton(None)
+        dlg.setValue(0)
+        self.worker = GridWorker(fname)
+        self.thread = QtCore.QThread()
+        self.worker.moveToThread(self.thread)
+        self.worker.progress.connect(dlg.setValue)
+        self.worker.finished.connect(lambda *args: tab.set_data(*args))
+        self.worker.finished.connect(self.thread.quit)
+        self.thread.started.connect(self.worker.process)
+        self.thread.start()
+        dlg.exec_()
+
+    def load_npz(self, fname, tab):
+        data = np.load(fname)
+        if 'frasta_info' in data:
+            tab.set_data_npz(data)
+            self.add_to_recent_files(fname)
+            return True
+        else:
+            QtWidgets.QMessageBox.warning(self, "Format error", "NPZ does not contain a grid data.")
+            self.tabs.removeTab(self.tabs.indexOf(tab))
+            return False
+
+    def create_tab_and_load(self, fname):
         tab = ScanTab()
         self.tabs.addTab(tab, fname.split('/')[-1])
         self.tabs.setCurrentWidget(tab)
         if fname.endswith('.csv') or fname.endswith('.dat'):
-            dlg = QtWidgets.QProgressDialog("Wczytywanie i gridowanie...", None, 0, 100, self)
-            dlg.setWindowModality(QtCore.Qt.ApplicationModal)
-            dlg.setAutoClose(True)
-            dlg.setCancelButton(None)
-            dlg.setValue(0)
-            self.worker = GridWorker(fname)
-            self.thread = QtCore.QThread()
-            self.worker.moveToThread(self.thread)
-            self.worker.progress.connect(dlg.setValue)
-            self.worker.finished.connect(lambda *args: tab.set_data(*args))
-            self.worker.finished.connect(self.thread.quit)
-            self.thread.started.connect(self.worker.process)
-            self.thread.start()
-            dlg.exec_()
+            self.load_csv(fname, tab)
             self.add_to_recent_files(fname)
         elif fname.endswith('.npz'):
-            data = np.load(fname)
-            if 'grid' in data:
-                tab.set_data_npz(data)
-                self.add_to_recent_files(fname)
-            else:
-                QtWidgets.QMessageBox.warning(self, "Format error", "NPZ does not contain a grid.")
-                self.tabs.removeTab(self.tabs.indexOf(tab))
-                return
+            self.load_npz(fname, tab)
         else:
             QtWidgets.QMessageBox.warning(self, "Unknown format", "Unsupported file type.")
             self.tabs.removeTab(self.tabs.indexOf(tab))
             return
+
+    def open_file(self):
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open file", "", "CSV, NPY, NPZ (*.csv *.dat *.npy *.npz)")
+        if not fname:
+            return
+        self.create_tab_and_load(fname)
 
     def open_file_from_recent(self, path):
         if not QtCore.QFile.exists(path):
@@ -253,56 +269,28 @@ class MainWindow(QtWidgets.QMainWindow):
             self.recent_files.remove(path)
             self.update_recent_files_menu()
             return
-        # ...prawie to samo co w open_file, ale bez dialogu...
-        tab = ScanTab()
-        self.tabs.addTab(tab, path.split('/')[-1])
-        self.tabs.setCurrentWidget(tab)
-        if path.endswith('.csv') or path.endswith('.dat'):
-            # ... kod z wątkiem i gridowaniem jak w open_file ...
-            dlg = QtWidgets.QProgressDialog("Wczytywanie i gridowanie...", None, 0, 100, self)
-            dlg.setWindowModality(QtCore.Qt.ApplicationModal)
-            dlg.setAutoClose(True)
-            dlg.setCancelButton(None)
-            dlg.setValue(0)
-            self.worker = GridWorker(path)
-            self.thread = QtCore.QThread()
-            self.worker.moveToThread(self.thread)
-            self.worker.progress.connect(dlg.setValue)
-            self.worker.finished.connect(lambda *args: tab.set_data(*args))
-            self.worker.finished.connect(self.thread.quit)
-            self.thread.started.connect(self.worker.process)
-            self.thread.start()
-            dlg.exec_()
-        elif path.endswith('.npz'):
-            data = np.load(path)
-            if 'grid' in data:
-                tab.set_data_npz(data)
-            else:
-                QtWidgets.QMessageBox.warning(self, "Format error", "NPZ does not contain a grid.")
-                self.tabs.removeTab(self.tabs.indexOf(tab))
-                return
-        else:
-            QtWidgets.QMessageBox.warning(self, "Unknown format", "Unsupported file type.")
-            self.tabs.removeTab(self.tabs.indexOf(tab))
-            return
-        self.add_to_recent_files(path)
+        self.create_tab_and_load(path)
 
-
-    def save_file(self):
-        tab = self.current_tab()
-        if tab:
-            tab.save_file(self)
 
     def save_single_scan(self):
         tab = self.current_tab()
         if not tab or not hasattr(tab, "grid") or tab.grid is None:
             QtWidgets.QMessageBox.warning(self, "No data", "No scan in current tab.")
             return
-        fname, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save as NPY", "", "NPY (*.npy)")
+        fname, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save as NPZ", "", "NPZ (*.npz)")
         if not fname:
             return
         try:
-            np.save(fname, tab.grid)
+            np.savez_compressed(fname,
+                    frasta_info=dict(
+                        format="grid_data",
+                        version="1.0",
+                    ),
+                    grid=tab.grid,
+                    xi=tab.xi,
+                    yi=tab.yi,
+                    px_x=tab.px_x,
+                    px_y=tab.px_y)
             QtWidgets.QMessageBox.information(self, "Saved", f"Scan saved to: {fname}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Error while saving:\n{e}")
@@ -427,14 +415,14 @@ class MainWindow(QtWidgets.QMainWindow):
             if msg.clickedButton() == btn1:
                 tab1 = ScanTab()
                 tab2 = ScanTab()
-                tab1.set_data(scan1_aligned, tab1.xi, tab1.yi, tab1.px_x, tab1.px_y, None, None, None)
-                tab2.set_data(scan2_aligned, tab2.xi, tab2.yi, tab2.px_x, tab2.px_y, None, None, None)
+                tab1.set_data(scan1_aligned, tab1.xi, tab1.yi, tab1.px_x, tab1.px_y)
+                tab2.set_data(scan2_aligned, tab2.xi, tab2.yi, tab2.px_x, tab2.px_y)
                 self.tabs.addTab(tab1, "Dopasowany ref")
                 self.tabs.addTab(tab2, "Dopasowany scan2")
             elif msg.clickedButton() == btn2:
                 current_tab = self.tabs.currentWidget()
                 if isinstance(current_tab, ScanTab):
-                    current_tab.set_data(scan2_aligned, current_tab.xi, current_tab.yi, current_tab.px_x, current_tab.px_y, None, None, None)
+                    current_tab.set_data(scan2_aligned, current_tab.xi, current_tab.yi, current_tab.px_x, current_tab.px_y)
             # jeśli "Anuluj", nie rób nic
 
         # Dialog wyboru zakładek

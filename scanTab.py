@@ -31,7 +31,6 @@ class ScanTab(QtWidgets.QWidget):
         self.yi = None
         self.px_x = None
         self.px_y = None
-        self.orig_data = None
 
         self.is_colormap = False
         self.current_colormap = 'gray'  # lub None
@@ -81,19 +80,17 @@ class ScanTab(QtWidgets.QWidget):
         self.hist_min_line.sigPositionChanged.connect(self.on_hist_line_changed)
         self.hist_max_line.sigPositionChanged.connect(self.on_hist_line_changed)
 
-
-
     def set_zero_point_mode(self):
         self.zero_point_mode = True
         # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
 
-    def set_data(self, grid, xi, yi, px_x, px_y, x, y, z):
+    def set_data(self, grid, xi, yi, px_x, px_y):
         self.grid = grid
         self.xi = xi
         self.yi = yi
         self.px_x = px_x
         self.px_y = px_y
-        self.orig_data = (x, y, z)
+        print(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
         self.update_image()
         self.update_histogram()
 
@@ -103,10 +100,7 @@ class ScanTab(QtWidgets.QWidget):
         self.yi = data['yi']
         self.px_x = data['px_x']
         self.px_y = data['px_y']
-        if 'x_data' in data:
-            self.orig_data = (data['x_data'], data['y_data'], data['z_data'])
-        else:
-            self.orig_data = None
+        print(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
         self.update_image()
         self.update_histogram()
 
@@ -160,20 +154,20 @@ class ScanTab(QtWidgets.QWidget):
         mesh.export("mesh_output.obj")
 
 
-    def save_file(self, parent=None):
-        if self.grid is None:
-            return
-        fname, nn = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz)")
-        print(nn)
-        if fname:
-            if fname.endswith(".npz"):
-                to_save = dict(grid=self.grid, xi=self.xi, yi=self.yi, px_x=self.px_x, px_y=self.px_y)
-                if self.orig_data:
-                    x, y, z = self.orig_data
-                    to_save.update(x_data=x, y_data=y, z_data=z)
-                np.savez(fname, **to_save)
-            elif fname.endswith(".obj"):
-                self.save_as_mesh(self.grid)
+    # def save_file(self, parent=None):
+    #     if self.grid is None:
+    #         return
+    #     fname, nn = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz)")
+    #     print(nn)
+    #     if fname:
+    #         if fname.endswith(".npz"):
+    #             to_save = dict(grid=self.grid, xi=self.xi, yi=self.yi, px_x=self.px_x, px_y=self.px_y)
+    #             if self.orig_data:
+    #                 x, y, z = self.orig_data
+    #                 to_save.update(x_data=x, y_data=y, z_data=z)
+    #             np.savez(fname, **to_save)
+    #         elif fname.endswith(".obj"):
+    #             self.save_as_mesh(self.grid)
 
     def flip_scan(self, parent=None):
         if self.grid is None:
@@ -184,8 +178,35 @@ class ScanTab(QtWidgets.QWidget):
         self.grid = -self.grid
         self.update_image()
 
+    # def fill_holes(self, parent=None):
+    #     if self.grid is None: #or not self.seed_points:
+    #         QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
+    #         return
+
+    #     tst = np.isnan(self.grid)
+    #     for (iy, ix) in self.seed_points:
+    #         filled = flood(tst, seed_point=(iy, ix))
+    #         tst[filled] = False
+
+    #     grid_x, grid_y = np.meshgrid(self.xi, self.yi)
+    #     interp_points = np.column_stack((grid_x[tst], grid_y[tst]))
+
+    #     if self.orig_data:
+    #         x, y, z = self.orig_data
+    #         interp_values = griddata((x, y), z, interp_points, method='nearest')
+    #     else:
+    #         valid = ~np.isnan(self.grid)
+    #         interp_values = griddata(
+    #             (grid_x[valid], grid_y[valid]),
+    #             self.grid[valid],
+    #             interp_points,
+    #             method='nearest'
+    #         )
+    #     self.grid[tst] = interp_values
+    #     self.update_image()
+
     def fill_holes(self, parent=None):
-        if self.grid is None: #or not self.seed_points:
+        if self.grid is None:
             QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
             return
 
@@ -197,17 +218,14 @@ class ScanTab(QtWidgets.QWidget):
         grid_x, grid_y = np.meshgrid(self.xi, self.yi)
         interp_points = np.column_stack((grid_x[tst], grid_y[tst]))
 
-        if self.orig_data:
-            x, y, z = self.orig_data
-            interp_values = griddata((x, y), z, interp_points, method='nearest')
-        else:
-            valid = ~np.isnan(self.grid)
-            interp_values = griddata(
-                (grid_x[valid], grid_y[valid]),
-                self.grid[valid],
-                interp_points,
-                method='nearest'
-            )
+        valid = ~np.isnan(self.grid)
+        interp_values = griddata(
+            (grid_x[valid], grid_y[valid]),
+            self.grid[valid],
+            interp_points,
+            method='nearest'
+        )
+
         self.grid[tst] = interp_values
         self.update_image()
 
