@@ -6,11 +6,11 @@ from PyQt5.QtGui import QIcon
 from overlayViewer import OverlayViewer
 from aboutDialog import AboutDialog
 from scanTab import ScanTab
-
+import h5py
 
 class GridWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
-    finished = QtCore.pyqtSignal(object, object, object, float, float) #, object, object, object)  # grid, xi, yi, px_x, px_y, x, y, z
+    finished = QtCore.pyqtSignal(object, object, object, float, float) # grid, xi, yi, px_x, px_y
 
     def __init__(self, fname):
         super().__init__()
@@ -232,33 +232,89 @@ class MainWindow(QtWidgets.QMainWindow):
         self.thread.start()
         dlg.exec_()
 
-    def load_npz(self, fname, tab):
+    def load_npz(self, fname):
         data = np.load(fname)
         if 'frasta_info' in data:
-            tab.set_data_npz(data)
+            cnt = data['frasta_cnt']
+            for i in range(cnt):
+                try:
+                    name = str(data[f"name_{i:02}"])
+                    grid = data[f"grid_{i:02}"]
+                    xi = data[f"xi_{i:02}"]
+                    yi = data[f"yi_{i:02}"]
+                    px_x = data[f"px_{i:02}"]
+                    px_y = data[f"py_{i:02}"]
+
+                    tab = ScanTab()
+                    self.tabs.addTab(tab, str(name))
+                    self.tabs.setCurrentWidget(tab)
+                    tab.set_data(grid, xi, yi, px_x, px_y)
+                except Exception as e:
+                    QtWidgets.QMessageBox.critical(self, "Error", f"Error while loading:\n{e}")
+
             self.add_to_recent_files(fname)
             return True
         else:
             QtWidgets.QMessageBox.warning(self, "Format error", "NPZ does not contain a grid data.")
-            self.tabs.removeTab(self.tabs.indexOf(tab))
+            # self.tabs.removeTab(self.tabs.indexOf(tab))
             return False
 
+    def load_h5(self, fname):
+        try:
+            with h5py.File(fname, 'r') as f:
+                if 'frasta_info' not in f.attrs:
+                    QtWidgets.QMessageBox.warning(self, "Format error", "HDF5 does not contain a grid data.")
+                    return False
+
+                cnt = f.attrs.get('frasta_cnt', 0)
+                for i in range(cnt):
+                    try:
+                        group_name = f"tab_{i:02}"
+                        if group_name not in f:
+                            continue
+
+                        group = f[group_name]
+                        name = group["name"][()].decode("utf-8")
+                        grid = group["grid"][:]
+                        xi = group["xi"][:]
+                        yi = group["yi"][:]
+                        px_x = group["px_x"][:]
+                        px_y = group["px_y"][:]
+
+                        tab = ScanTab()
+                        self.tabs.addTab(tab, str(name))
+                        self.tabs.setCurrentWidget(tab)
+                        tab.set_data(grid, xi, yi, px_x, px_y)
+
+                    except Exception as e:
+                        QtWidgets.QMessageBox.critical(self, "Error", f"Error while loading tab {i}:\n{e}")
+
+            self.add_to_recent_files(fname)
+            return True
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Error while opening HDF5 file:\n{e}")
+            return False
+
+
     def create_tab_and_load(self, fname):
-        tab = ScanTab()
-        self.tabs.addTab(tab, fname.split('/')[-1])
-        self.tabs.setCurrentWidget(tab)
         if fname.endswith('.csv') or fname.endswith('.dat'):
+            tab = ScanTab()
+            self.tabs.addTab(tab, fname.split('/')[-1])
+            self.tabs.setCurrentWidget(tab)
             self.load_csv(fname, tab)
             self.add_to_recent_files(fname)
         elif fname.endswith('.npz'):
-            self.load_npz(fname, tab)
+            self.load_npz(fname)
+        elif fname.endswith('.h5'):
+            self.load_h5(fname)
         else:
             QtWidgets.QMessageBox.warning(self, "Unknown format", "Unsupported file type.")
-            self.tabs.removeTab(self.tabs.indexOf(tab))
+            # self.tabs.removeTab(self.tabs.indexOf(tab))
             return
 
     def open_file(self):
-        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open file", "", "CSV, NPY, NPZ (*.csv *.dat *.npy *.npz)")
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open file", "", "CSV, NPZ, H5 (*.csv *.dat *.npz *.h5)")
         if not fname:
             return
         self.create_tab_and_load(fname)
@@ -271,36 +327,75 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.create_tab_and_load(path)
 
+    # format: tabs = [('name0', tab0), ('name1', tab1), ...]
+    def save_tabs(self, tabs=None):
+        if tabs is None:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No data to save.")
+            return
+
+        fname, selected_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Scan", "", "NPZ (*.npz);;HDF5 (*.h5)"
+        )
+        if not fname:
+            return
+
+        if selected_filter.startswith("NPZ") and not fname.endswith(".npz"):
+            fname += ".npz"
+        elif selected_filter.startswith("HDF5") and not fname.endswith(".h5"):
+            fname += ".h5"
+
+        i = 0
+        try:
+            if fname.endswith(".npz"):
+                to_save = {
+                    'frasta_info': "grid_data",
+                }
+                for name, tab in tabs:
+                    to_save[f"name_{i:02}"] = name
+                    to_save[f"grid_{i:02}"] = tab.grid
+                    to_save[f"xi_{i:02}"] = tab.xi
+                    to_save[f"yi_{i:02}"] = tab.yi
+                    to_save[f"px_{i:02}"] = tab.px_x
+                    to_save[f"py_{i:02}"] = tab.px_y
+                    i += 1
+                to_save['frasta_cnt'] = i
+
+                np.savez_compressed(fname, **to_save)
+
+            elif fname.endswith(".h5"):
+                with h5py.File(fname, 'w') as f:
+                    f.attrs['frasta_info'] = "grid_data"
+                    for name, tab in tabs:
+                        group = f.create_group(f"tab_{i:02}")
+                        group.create_dataset("name", data=np.bytes_(name))
+                        group.create_dataset("grid", data=tab.grid, compression="gzip", compression_opts=9)
+                        group.create_dataset("xi", data=tab.xi, compression="gzip", compression_opts=9)
+                        group.create_dataset("yi", data=tab.yi, compression="gzip", compression_opts=9)
+                        group.create_dataset("px_x", data=np.atleast_1d(tab.px_x))
+                        group.create_dataset("px_y", data=np.atleast_1d(tab.px_y))
+                        i += 1
+                    f.attrs['frasta_cnt'] = i
+
+            QtWidgets.QMessageBox.information(self, "Saved", f"Scan saved to: {fname}")
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Error while saving:\n{e}")
+
 
     def save_single_scan(self):
         tab = self.current_tab()
         if not tab or not hasattr(tab, "grid") or tab.grid is None:
             QtWidgets.QMessageBox.warning(self, "No data", "No scan in current tab.")
             return
-        fname, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save as NPZ", "", "NPZ (*.npz)")
-        if not fname:
-            return
-        try:
-            np.savez_compressed(fname,
-                    frasta_info=dict(
-                        format="grid_data",
-                        version="1.0",
-                    ),
-                    grid=tab.grid,
-                    xi=tab.xi,
-                    yi=tab.yi,
-                    px_x=tab.px_x,
-                    px_y=tab.px_y)
-            QtWidgets.QMessageBox.information(self, "Saved", f"Scan saved to: {fname}")
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Error while saving:\n{e}")
+
+        self.save_tabs([("nowyskan", tab)])
+        
 
     def save_multiple_scans(self):
         if self.tabs.count() == 0:
             QtWidgets.QMessageBox.warning(self, "No scans", "No scan tabs are open.")
             return
 
-        # --- 1. Dialog wyboru skanów i nazw ---
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Save selected scans")
         layout = QtWidgets.QVBoxLayout(dialog)
@@ -319,11 +414,6 @@ class MainWindow(QtWidgets.QMainWindow):
             checkboxes.append(cb)
             lineedits.append(le)
 
-        layout.addWidget(QtWidgets.QLabel("Select file format:"))
-        format_combo = QtWidgets.QComboBox()
-        format_combo.addItems(["NPZ (compressed)", "HDF5"])
-        layout.addWidget(format_combo)
-
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         layout.addWidget(buttons)
@@ -333,8 +423,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if dialog.exec_() != QtWidgets.QDialog.Accepted:
             return
 
-        # --- 2. Zbieranie wyboru ---
-        to_save = []
+        tabs = []
         for i, cb in enumerate(checkboxes):
             if cb.isChecked():
                 dataset_name = lineedits[i].text().strip()
@@ -345,47 +434,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 if not hasattr(tab, "grid") or tab.grid is None:
                     QtWidgets.QMessageBox.warning(self, "No data", f"Tab '{cb.text()}' has no scan data.")
                     return
-                to_save.append((dataset_name, tab.grid))
+                tabs.append((dataset_name, tab))
 
-        if not to_save:
+        if not tabs:
             QtWidgets.QMessageBox.warning(self, "Nothing to save", "No scans selected.")
             return
 
-        # --- 3. Zapytaj o plik docelowy ---
-        fmt = format_combo.currentText()
-        if fmt.startswith("NPZ"):
-            fname, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self, "Save as NPZ", "", "NPZ (*.npz)")
-            if not fname:
-                return
-            try:
-                np.savez_compressed(fname, **{name: grid for name, grid in to_save})
-                QtWidgets.QMessageBox.information(self, "Saved", f"Scans saved to: {fname}")
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Error", f"Error while saving:\n{e}")
+        self.save_tabs(tabs)
 
-        else:  # HDF5
-            fname, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self, "Save as HDF5", "", "HDF5 (*.h5)")
-            if not fname:
-                return
-            import h5py
-            try:
-                with h5py.File(fname, "a") as f:
-                    for name, grid in to_save:
-                        if name in f:
-                            msg = QtWidgets.QMessageBox.question(
-                                self, "Dataset exists",
-                                f"Dataset '{name}' already exists.\nOverwrite?",
-                                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
-                            )
-                            if msg != QtWidgets.QMessageBox.Yes:
-                                continue
-                            del f[name]
-                        f.create_dataset(name, data=grid)
-                QtWidgets.QMessageBox.information(self, "Saved", f"Scans saved to: {fname}")
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Error", f"Error while saving:\n{e}")
 
     def flip_scan(self):
         tab = self.current_tab()
@@ -402,7 +458,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Za mało skanów", "Musisz mieć przynajmniej 2 skany!")
             return
 
-        def receive_aligned_grids(scan1_aligned, scan2_aligned):
+        def receive_aligned_grids(scan1_aligned, scan2_aligned, vmin1, vmax1, vmin2, vmax2):
             print(f"scan1: {scan1_aligned.shape}, scan2: {scan2_aligned.shape}")
             # popup: nadpisać czy dodać nowe zakładki?
             msg = QtWidgets.QMessageBox(self)
@@ -419,6 +475,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 tab2.set_data(scan2_aligned, tab2.xi, tab2.yi, tab2.px_x, tab2.px_y)
                 self.tabs.addTab(tab1, "Dopasowany ref")
                 self.tabs.addTab(tab2, "Dopasowany scan2")
+                tab1.hist_min_line.setValue(vmin1)
+                tab1.hist_max_line.setValue(vmax1)
+                tab2.hist_min_line.setValue(vmin2)
+                tab2.hist_max_line.setValue(vmax2)
             elif msg.clickedButton() == btn2:
                 current_tab = self.tabs.currentWidget()
                 if isinstance(current_tab, ScanTab):
@@ -468,7 +528,13 @@ class MainWindow(QtWidgets.QMainWindow):
         grid2 = tab2.grid
 
         # --- Tu otwieramy okno narzędzia różnicowego ---
-        self.viewer = OverlayViewer(grid1, grid2, on_accept=receive_aligned_grids)
+        self.viewer = OverlayViewer(
+            grid1, grid2,
+            vmin1=tab1.hist_min_line.value(), vmax1=tab1.hist_max_line.value(),
+            vmin2=tab2.hist_min_line.value(), vmax2=tab2.hist_max_line.value(),
+            on_accept=receive_aligned_grids
+        )
+        
         self.viewer.setWindowTitle(f"Porównanie: {names[idx1]} vs {names[idx2]}")
         self.viewer.show()
 

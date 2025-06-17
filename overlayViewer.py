@@ -3,18 +3,13 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
 class OverlayViewer(QtWidgets.QWidget):
-    def __init__(self, scan1, scan2, on_accept=None):
+    def __init__(self, scan1, scan2, vmin1=None, vmax1=None, vmin2=None, vmax2=None, on_accept=None):
         super().__init__()
+
+        self.create_gui()
 
         self.on_accept = on_accept
 
-        # Layout główny
-        layout = QtWidgets.QVBoxLayout(self)
-
-        # Główne okno i scena
-        self.view = pg.GraphicsLayoutWidget()
-        self.viewbox = self.view.addViewBox()
-        self.viewbox.setAspectLocked(True)
         
         self.scan1 = scan1
         self.scan2 = scan2
@@ -31,34 +26,44 @@ class OverlayViewer(QtWidgets.QWidget):
 
         self.viewbox.addItem(self.img1)
         self.viewbox.addItem(self.img2)
-
-        # Ustal najmniejszy wspólny rozmiar
-        h = min(scan1.shape[0], scan2.shape[0])
-        w = min(scan1.shape[1], scan2.shape[1])
-        scan1_c = scan1[:h, :w]
-        scan2_c = scan2[:h, :w]
-
-        # Wspólna maska: tylko gdzie oba mają dane
-        common_mask = (~np.isnan(scan1_c)) & (~np.isnan(scan2_c))
-        if np.any(common_mask):
-            common_values = np.concatenate([scan1_c[common_mask], scan2_c[common_mask]])
-            z_min = np.nanmin(common_values)
-            z_max = np.nanmax(common_values)
-        else:
-            z_min = max(np.nanmin(scan1_c), np.nanmin(scan2_c))
-            z_max = min(np.nanmax(scan1_c), np.nanmax(scan2_c))
-        margin = 0.1 * (z_max - z_min)
-        levels = (z_min - margin, z_max + margin)
-
-        print(f"levels: {levels}")
-
-        self.img1.setLevels(levels)
-        self.img2.setLevels(levels)
-
-
-        # Dopasowanie widoku do zawartości
         self.viewbox.autoRange()
 
+        def safe_minmax(arr):
+            arr = arr[np.isfinite(arr)]  # odrzuca NaN, +inf, -inf
+            if arr.size == 0:
+                return 0.0, 1.0  # domyślne wartości, jeśli wszystko było złe
+            return np.min(arr), np.max(arr)
+
+        vmin1_, vmax1_ = safe_minmax(scan1)
+        vmin2_, vmax2_ = safe_minmax(scan2)
+
+        self.vmin1 = vmin1 if vmin1 is not None else vmin1_
+        self.vmax1 = vmax1 if vmax1 is not None else vmax1_
+        self.vmin2 = vmin2 if vmin2 is not None else vmin2_
+        self.vmax2 = vmax2 if vmax2 is not None else vmax2_
+
+        self.img1.setLevels((self.vmin1, self.vmax1))
+        self.img2.setLevels((self.vmin2, self.vmax2))
+
+        # zapamiętaj siatki jako atrybuty
+        self.original_scan1 = scan1
+        self.original_scan2 = scan2
+
+        # Połączenia
+        self.slider_tx.valueChanged.connect(self.updateTransform)
+        self.slider_ty.valueChanged.connect(self.updateTransform)
+        self.slider_angle.valueChanged.connect(self.updateTransform)
+
+        self.updateTransform()
+
+    def create_gui(self):
+        # Layout główny
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Główne okno i scena
+        self.view = pg.GraphicsLayoutWidget()
+        self.viewbox = self.view.addViewBox()
+        self.viewbox.setAspectLocked(True)
 
         # Obraz różnicy
         self.diff_view = pg.ImageView(view=pg.PlotItem())
@@ -102,7 +107,7 @@ class OverlayViewer(QtWidgets.QWidget):
         self.blink_timer.timeout.connect(self.blinkToggle)
         self.blink_state = True
 
-        self.update_diff_btn = QtWidgets.QPushButton("Aktualizuj obraz różnic")
+        self.update_diff_btn = QtWidgets.QPushButton("Redraw difference view")
         self.update_diff_btn.clicked.connect(self.update_difference_map)
         tool2_layout.addWidget(self.update_diff_btn)
 
@@ -110,48 +115,31 @@ class OverlayViewer(QtWidgets.QWidget):
         self.save_button.clicked.connect(self.saveAlignedScans)
         tool2_layout.addWidget(self.save_button)
 
-        self.accept_button = QtWidgets.QPushButton("Zatwierdź i przekaż do głównego programu")
+        self.accept_button = QtWidgets.QPushButton("Accept changes")
         self.accept_button.clicked.connect(self.accept_result)
         tool2_layout.addWidget(self.accept_button)
 
         # Zakres min/max
-        self.levels_min = QtWidgets.QDoubleSpinBox()
-        self.levels_min.setDecimals(2)
-        self.levels_min.setPrefix("Min: ")
-        self.levels_min.setRange(-1e6, 1e6)
-        self.levels_max = QtWidgets.QDoubleSpinBox()
-        self.levels_max.setDecimals(2)
-        self.levels_max.setPrefix("Max: ")
-        self.levels_max.setRange(-1e6, 1e6)
+        # self.levels_min = QtWidgets.QDoubleSpinBox()
+        # self.levels_min.setDecimals(2)
+        # self.levels_min.setPrefix("Min: ")
+        # self.levels_min.setRange(-1e6, 1e6)
 
-        # Domyślne wartości
-        self.levels_min.setValue(levels[0])
-        self.levels_max.setValue(levels[1])
+        # self.levels_max = QtWidgets.QDoubleSpinBox()
+        # self.levels_max.setDecimals(2)
+        # self.levels_max.setPrefix("Max: ")
+        # self.levels_max.setRange(-1e6, 1e6)
 
-        self.levels_min.valueChanged.connect(self.apply_overlay_mask)
-        self.levels_max.valueChanged.connect(self.apply_overlay_mask)
+        # self.levels_min.valueChanged.connect(self.apply_overlay_mask)
+        # self.levels_max.valueChanged.connect(self.apply_overlay_mask)
 
-        tool2_layout.addWidget(self.levels_min)
-        tool2_layout.addWidget(self.levels_max)
-
+        # tool2_layout.addWidget(self.levels_min)
+        # tool2_layout.addWidget(self.levels_max)
 
         south_layout.addLayout(tool2_layout)
 
         layout.addLayout(south_layout)
 
-        # zapamiętaj siatki jako atrybuty
-        self.original_scan1 = scan1
-        self.original_scan2 = scan2
-
-
-        # Połączenia
-        self.slider_tx.valueChanged.connect(self.updateTransform)
-        self.slider_ty.valueChanged.connect(self.updateTransform)
-        self.slider_angle.valueChanged.connect(self.updateTransform)
-
-        #self.viewbox.setRange(rect=self.img1.boundingRect())
-
-        self.updateTransform()
 
     def sliders_layout(self):
         # Suwaki
@@ -278,7 +266,7 @@ class OverlayViewer(QtWidgets.QWidget):
 
         # Wywołaj callback
         if self.on_accept is not None:
-            self.on_accept(scan1_cropped, scan2_trans_cropped)
+            self.on_accept(scan1_cropped, scan2_trans_cropped, self.vmin1, self.vmax1, self.vmin2, self.vmax2)
         self.close()
 
     def update_difference_map(self):
@@ -323,34 +311,34 @@ class OverlayViewer(QtWidgets.QWidget):
         lut = pg.colormap.get("inferno").getLookupTable(0.0, 1.0, 512)
         image_item.setLookupTable(lut)
 
-    def update_levels(self):
-        if self._last_diff_image is None:
-            return
-        vmin = self.levels_min.value()
-        vmax = self.levels_max.value()
-        # Maskowanie: wszystko poza zakresem ustaw jako NaN
-        masked = self._last_diff_image.copy()
-        mask = (masked < vmin) | (masked > vmax)
-        masked[mask] = np.nan
-        self.diff_view.setImage(np.nan_to_num(masked, nan=0), autoLevels=False)
+    # def update_levels(self):
+    #     if self._last_diff_image is None:
+    #         return
+    #     vmin = self.levels_min.value()
+    #     vmax = self.levels_max.value()
+    #     # Maskowanie: wszystko poza zakresem ustaw jako NaN
+    #     masked = self._last_diff_image.copy()
+    #     mask = (masked < vmin) | (masked > vmax)
+    #     masked[mask] = np.nan
+    #     self.diff_view.setImage(np.nan_to_num(masked, nan=0), autoLevels=False)
 
-    def update_overlay_levels(self):
-        vmin = self.levels_min.value()
-        vmax = self.levels_max.value()
-        self.img1.setLevels((vmin, vmax))
-        self.img2.setLevels((vmin, vmax))
+    # def update_overlay_levels(self):
+    #     vmin = self.levels_min.value()
+    #     vmax = self.levels_max.value()
+    #     self.img1.setLevels((vmin, vmax))
+    #     self.img2.setLevels((vmin, vmax))
 
     def apply_overlay_mask(self):
-        vmin = self.levels_min.value()
-        vmax = self.levels_max.value()
+        # vmin = self.levels_min.value()
+        # vmax = self.levels_max.value()
         masked1 = self._orig_scan1.copy()
         masked2 = self._orig_scan2.copy()
-        masked1[(masked1 < vmin) | (masked1 > vmax)] = np.nan
-        masked2[(masked2 < vmin) | (masked2 > vmax)] = np.nan
+        masked1[(masked1 < self.vmin1) | (masked1 > self.vmax1)] = np.nan
+        masked2[(masked2 < self.vmin2) | (masked2 > self.vmax2)] = np.nan
         self.img1.setImage(masked1, autoLevels=False)
         self.img2.setImage(masked2, autoLevels=False)
-        self.img1.setLevels((vmin, vmax))
-        self.img2.setLevels((vmin, vmax))
+        self.img1.setLevels((self.vmin1, self.vmax1))
+        self.img2.setLevels((self.vmin2, self.vmax2))
 
 
     def updateTransform(self):

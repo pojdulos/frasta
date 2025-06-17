@@ -4,6 +4,20 @@ import pyqtgraph as pg
 from skimage.segmentation import flood
 from scipy.interpolate import griddata
 import trimesh
+import time
+from functools import wraps
+
+from responsiveInfiniteLine import ResponsiveInfiniteLine
+
+def measure_time(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        end = time.perf_counter()
+        print(f">>> {func.__name__}() took {end - start:.4f} seconds")
+        return result
+    return wrapper
 
 class ScanTab(QtWidgets.QWidget):
     def __init__(self, parent=None):
@@ -16,6 +30,8 @@ class ScanTab(QtWidgets.QWidget):
 
         self.hist_widget = pg.PlotWidget()
         self.hist_widget.setMaximumHeight(120)  # Wąski pasek
+        self.hist_widget.setMenuEnabled(False)
+        self.hist_widget.setMouseEnabled(x=False, y=False)
 
         hlayout = QtWidgets.QVBoxLayout(self)
         hlayout.addWidget(self.image_view, stretch=1)
@@ -27,6 +43,7 @@ class ScanTab(QtWidgets.QWidget):
 
         self.seed_points = []
         self.grid = None
+        self.masked = None
         self.xi = None
         self.yi = None
         self.px_x = None
@@ -35,16 +52,10 @@ class ScanTab(QtWidgets.QWidget):
         self.is_colormap = False
         self.current_colormap = 'gray'  # lub None
 
-        self.zero_window_size = 7  # lub inna liczba nieparzysta
-        self.zero_sigma = 2.0      # ile odchyleń przyjmujesz jako "nie odstające"
+        self.zero_window_size = 15  # lub inna liczba nieparzysta
+        self.zero_sigma = 2.0       # ile odchyleń przyjmujesz jako "nie odstające"
 
         self.image_view.getView().scene().sigMouseClicked.connect(self.mouse_clicked)
-
-    def on_hist_line_changed(self):
-        vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
-        vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
-        self.update_image(vmin, vmax)
-
 
     def update_histogram(self):
         if self.grid is None:
@@ -54,7 +65,7 @@ class ScanTab(QtWidgets.QWidget):
             self.hist_widget.clear()
             return
 
-        y, x = np.histogram(data, bins=512)
+        y, x = np.histogram(data, bins=1024)
         self.hist_widget.clear()
         self.hist_plot = self.hist_widget.plot(x, y, stepMode=True, fillLevel=0, brush=(150, 150, 150, 150))
 
@@ -70,39 +81,49 @@ class ScanTab(QtWidgets.QWidget):
         min_val = max(min_val, vmin)
         max_val = min(max_val, vmax)
 
-        # Utwórz nowe linie
-        self.hist_min_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('b', width=2))
-        self.hist_max_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen('r', width=2))
+        self.hist_min_line = ResponsiveInfiniteLine(update_callback=self.update_histogram_threshold, angle=90, movable=True, pen=pg.mkPen('b', width=2), hoverPen=pg.mkPen('y', width=2))
+        self.hist_max_line = ResponsiveInfiniteLine(update_callback=self.update_histogram_threshold, angle=90, movable=True, pen=pg.mkPen('r', width=2), hoverPen=pg.mkPen('y', width=2))
         self.hist_widget.addItem(self.hist_min_line)
         self.hist_widget.addItem(self.hist_max_line)
         self.hist_min_line.setValue(min_val)
         self.hist_max_line.setValue(max_val)
-        self.hist_min_line.sigPositionChanged.connect(self.on_hist_line_changed)
-        self.hist_max_line.sigPositionChanged.connect(self.on_hist_line_changed)
+
+    def on_hist_line_changed(self):
+        vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
+        vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
+        self.update_image(vmin, vmax)
+
+    def update_histogram_threshold(self, value):
+        # print("Zaktualizowano próg:", value)
+        vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
+        vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
+        self.update_image(vmin, vmax)
 
     def set_zero_point_mode(self):
         self.zero_point_mode = True
         # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
 
+    def get_data(self):
+        return {
+            'grid': self.grid,
+            'xi': self.xi,
+            'yi': self.yi,
+            'px_x': self.px_x,
+            'px_y': self.px_y
+        }
+
+
     def set_data(self, grid, xi, yi, px_x, px_y):
         self.grid = grid
+        self.masked = grid
         self.xi = xi
         self.yi = yi
         self.px_x = px_x
         self.px_y = px_y
-        print(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
+        #print(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
         self.update_image()
         self.update_histogram()
 
-    def set_data_npz(self, data):
-        self.grid = data['grid']
-        self.xi = data['xi']
-        self.yi = data['yi']
-        self.px_x = data['px_x']
-        self.px_y = data['px_y']
-        print(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
-        self.update_image()
-        self.update_histogram()
 
     def grid_to_mesh_vectorized(self, grid, pixel_size_x=1.0, pixel_size_y=1.0):
         h, w = grid.shape
@@ -153,21 +174,6 @@ class ScanTab(QtWidgets.QWidget):
         mesh = trimesh.Trimesh(vertices=v, faces=f, process=False)
         mesh.export("mesh_output.obj")
 
-
-    # def save_file(self, parent=None):
-    #     if self.grid is None:
-    #         return
-    #     fname, nn = QtWidgets.QFileDialog.getSaveFileName(parent or self, "Save as...", "", "NPZ (*.npz)")
-    #     print(nn)
-    #     if fname:
-    #         if fname.endswith(".npz"):
-    #             to_save = dict(grid=self.grid, xi=self.xi, yi=self.yi, px_x=self.px_x, px_y=self.px_y)
-    #             if self.orig_data:
-    #                 x, y, z = self.orig_data
-    #                 to_save.update(x_data=x, y_data=y, z_data=z)
-    #             np.savez(fname, **to_save)
-    #         elif fname.endswith(".obj"):
-    #             self.save_as_mesh(self.grid)
 
     def flip_scan(self, parent=None):
         if self.grid is None:
@@ -292,6 +298,8 @@ class ScanTab(QtWidgets.QWidget):
         self.is_colormap = not self.is_colormap
         self.update_image()
 
+
+#    @measure_time
     def update_image(self, vmin=None, vmax=None):
         if self.grid is not None:
             
@@ -304,16 +312,16 @@ class ScanTab(QtWidgets.QWidget):
                     vmax = float(np.max(self.grid))
 
             data = self.grid.T
-            masked = data.copy()
-            masked[(masked < vmin) | (masked > vmax)] = np.nan
-            if np.isnan(masked).all():
-                masked = np.zeros_like(masked)
+            self.masked = data.copy()
+            self.masked[(self.masked < vmin) | (self.masked > vmax)] = np.nan
+            if np.isnan(self.masked).all():
+                self.masked = np.zeros_like(self.masked)
             image_item = self.image_view.getImageItem()
             if self.is_colormap:
                 lut = pg.colormap.get('turbo').getLookupTable(0.0, 1.0, 256)
                 image_item.setLookupTable(lut)
             else:
                 image_item.setLookupTable(None)
-            self.image_view.setImage(masked, autoLevels=True, autoRange=False)
+            self.image_view.setImage(self.masked, autoLevels=True, autoRange=False)
         self.seed_points = []
 
