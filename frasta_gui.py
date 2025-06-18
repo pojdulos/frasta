@@ -75,6 +75,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.load_recent_files()
 
         self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setTabsClosable(True)
+        self.tabs.tabCloseRequested.connect(self.close_tab)
         self.setCentralWidget(self.tabs)
 
         self.create_actions()
@@ -85,6 +87,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker = None
         self.thread = None
 
+    def close_tab(self, index):
+        widget = self.tabs.widget(index)
+        if widget is not None:
+            self.tabs.removeTab(index)
+            widget.deleteLater()
+
     def create_actions(self):
         self.actions = { 
             "open": QtWidgets.QAction("Open...", self),
@@ -93,6 +101,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "fill": QtWidgets.QAction("Fill holes", self),
             "flip": QtWidgets.QAction("Flip & reverse", self),
             "zero": QtWidgets.QAction("Set zero point", self),
+            "tilt": QtWidgets.QAction("Set tilt", self),
             "colormap": QtWidgets.QAction("Toggle colormap", self),
             "view3d":  QtWidgets.QAction("View 3d...", self),
             "compare": QtWidgets.QAction("Scan positioning...", self),
@@ -124,6 +133,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["fill"].triggered.connect(self.fill_holes)
         self.actions["flip"].triggered.connect(self.flip_scan)
         self.actions["zero"].triggered.connect(self.set_zero_point_mode)
+        self.actions["tilt"].triggered.connect(self.set_tilt_mode)
         self.actions["colormap"].triggered.connect(self.toggle_colormap_current_tab)
         self.actions["view3d"].triggered.connect(self.view3d)
         self.actions["compare"].triggered.connect(self.compare_scans)
@@ -167,6 +177,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addAction(self.actions["fill"])
         self.toolbar.addAction(self.actions["flip"])
         self.toolbar.addAction(self.actions["zero"])
+        self.toolbar.addAction(self.actions["tilt"])
         self.toolbar.addAction(self.actions["colormap"])
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.actions["view3d"])
@@ -192,6 +203,11 @@ class MainWindow(QtWidgets.QMainWindow):
         tab = self.current_tab()
         if tab:
             tab.set_zero_point_mode()
+
+    def set_tilt_mode(self):
+        tab = self.current_tab()
+        if tab:
+            tab.set_tilt_mode()
 
     def show_about_dialog(self):
         dlg = AboutDialog(self)

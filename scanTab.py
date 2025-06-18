@@ -41,6 +41,7 @@ class ScanTab(QtWidgets.QWidget):
         self.setLayout(hlayout)
 
         self.zero_point_mode = False
+        self.tilt_mode = False
 
         self.seed_points = []
         self.grid = None
@@ -102,6 +103,10 @@ class ScanTab(QtWidgets.QWidget):
 
     def set_zero_point_mode(self):
         self.zero_point_mode = True
+        # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
+
+    def set_tilt_mode(self):
+        self.tilt_mode = True
         # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
 
     def getGridData(self):
@@ -270,6 +275,38 @@ class ScanTab(QtWidgets.QWidget):
             return median
         return np.mean(non_outliers)
 
+    def fit_plane_to_grid(self, grid, x, y, s=100):
+        h, w = grid.shape
+        xmin = max(0, x - s)
+        xmax = min(w, x + s + 1)
+        ymin = max(0, y - s)
+        ymax = min(h, y + s + 1)
+
+        window = grid[ymin:ymax, xmin:xmax]
+
+        yy, xx = np.mgrid[ymin:ymax, xmin:xmax]
+        zz = window
+
+        # Zamień na 1D i odrzuć NaN
+        X = xx.flatten()
+        Y = yy.flatten()
+        Z = zz.flatten()
+        mask = ~np.isnan(Z)
+        X = X[mask]
+        Y = Y[mask]
+        Z = Z[mask]
+
+        if len(Z) < 10:
+            raise ValueError("Zbyt mało ważnych danych do dopasowania płaszczyzny")
+
+        A = np.vstack((X, Y)).T
+        from sklearn.linear_model import LinearRegression
+        model = LinearRegression().fit(A, Z)
+        a, b = model.coef_
+        c = model.intercept_
+
+        return a, b, c
+    
     def mouse_clicked(self, event):
         if self.grid is None:
             return
@@ -299,6 +336,21 @@ class ScanTab(QtWidgets.QWidget):
                 self.hist_max_line.setValue(max_val)
                 return
             
+            elif self.tilt_mode:
+                self.tilt_mode = False
+                a, b, c = self.fit_plane_to_grid(self.grid, x, y, s=100)
+
+                # Możesz teraz utworzyć macierz tej samej wielkości co grid:
+                rows, cols = self.grid.shape
+                yy, xx = np.mgrid[0:rows, 0:cols]
+                plane = a * xx + b * yy + c
+
+                # Korekta:
+                self.grid = self.grid - plane
+                self.update_image()
+                self.update_histogram()
+                return
+
             if event.modifiers() & QtCore.Qt.ShiftModifier:
                 self.seed_points.append((y, x))
                 scatter = pg.ScatterPlotItem([x], [y], size=10, brush=pg.mkBrush('r'))
