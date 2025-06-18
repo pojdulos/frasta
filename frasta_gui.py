@@ -1,12 +1,16 @@
 import sys
+import h5py
 import numpy as np
 import pandas as pd
 from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtGui import QIcon
+from functools import partial
+
+from profileViewer import ProfileViewer
 from overlayViewer import OverlayViewer
 from aboutDialog import AboutDialog
 from scanTab import ScanTab
-import h5py
+from gridData import GridData
 
 class GridWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
@@ -90,6 +94,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "flip": QtWidgets.QAction("Flip & reverse", self),
             "zero": QtWidgets.QAction("Set zero point", self),
             "colormap": QtWidgets.QAction("Toggle colormap", self),
+            "view3d":  QtWidgets.QAction("View 3d...", self),
             "compare": QtWidgets.QAction("Scan positioning...", self),
             "profile": QtWidgets.QAction("Profile analysis...", self),
             "about": QtWidgets.QAction("About...", self),
@@ -120,6 +125,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["flip"].triggered.connect(self.flip_scan)
         self.actions["zero"].triggered.connect(self.set_zero_point_mode)
         self.actions["colormap"].triggered.connect(self.toggle_colormap_current_tab)
+        self.actions["view3d"].triggered.connect(self.view3d)
         self.actions["compare"].triggered.connect(self.compare_scans)
         self.actions["profile"].triggered.connect(self.start_profile_analysis)
         self.actions["about"].triggered.connect(self.show_about_dialog)
@@ -163,11 +169,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addAction(self.actions["zero"])
         self.toolbar.addAction(self.actions["colormap"])
         self.toolbar.addSeparator()
+        self.toolbar.addAction(self.actions["view3d"])
         self.toolbar.addAction(self.actions["compare"])
         self.toolbar.addAction(self.actions["profile"])
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.actions["about"])
         self.toolbar.addAction(self.actions["exit"])
+
+    def view3d(self):
+        tab = self.current_tab()
+        if tab:
+            from simple3DWindow import Simple3DWindow
+            win = Simple3DWindow(tab.grid, parent=self)
+            win.exec_()
 
     def toggle_colormap_current_tab(self):
         tab = self.current_tab()
@@ -458,32 +472,29 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Za mało skanów", "Musisz mieć przynajmniej 2 skany!")
             return
 
-        def receive_aligned_grids(scan1_aligned, scan2_aligned, vmin1, vmax1, vmin2, vmax2):
-            print(f"scan1: {scan1_aligned.shape}, scan2: {scan2_aligned.shape}")
-            # popup: nadpisać czy dodać nowe zakładki?
-            msg = QtWidgets.QMessageBox(self)
-            msg.setWindowTitle("Dopasowanie skanów")
-            msg.setText("Jak chcesz zapisać dopasowanie?")
-            btn1 = msg.addButton("Jako nowe zakładki", QtWidgets.QMessageBox.AcceptRole)
-            btn2 = msg.addButton("Nadpisz istniejące", QtWidgets.QMessageBox.ActionRole)
-            msg.addButton("Anuluj", QtWidgets.QMessageBox.RejectRole)
-            msg.exec_()
-            if msg.clickedButton() == btn1:
+        def receive_aligned_grids(scan1_aligned_data : GridData, scan2_aligned_data : GridData, idx1=None, idx2=None):
+            b = idx1 is not None and idx2 is not None
+            if b:
+                msg = QtWidgets.QMessageBox(self)
+                msg.setWindowTitle("Dopasowanie skanów")
+                msg.setText("Jak chcesz zapisać dopasowanie?")
+                btn1 = msg.addButton("Jako nowe zakładki", QtWidgets.QMessageBox.AcceptRole)
+                btn2 = msg.addButton("Nadpisz istniejące", QtWidgets.QMessageBox.ActionRole)
+                msg.addButton("Anuluj", QtWidgets.QMessageBox.RejectRole)
+                msg.exec_()
+
+            if not b or msg.clickedButton() == btn1:
                 tab1 = ScanTab()
                 tab2 = ScanTab()
-                tab1.set_data(scan1_aligned, tab1.xi, tab1.yi, tab1.px_x, tab1.px_y)
-                tab2.set_data(scan2_aligned, tab2.xi, tab2.yi, tab2.px_x, tab2.px_y)
                 self.tabs.addTab(tab1, "Dopasowany ref")
                 self.tabs.addTab(tab2, "Dopasowany scan2")
-                tab1.hist_min_line.setValue(vmin1)
-                tab1.hist_max_line.setValue(vmax1)
-                tab2.hist_min_line.setValue(vmin2)
-                tab2.hist_max_line.setValue(vmax2)
             elif msg.clickedButton() == btn2:
-                current_tab = self.tabs.currentWidget()
-                if isinstance(current_tab, ScanTab):
-                    current_tab.set_data(scan2_aligned, current_tab.xi, current_tab.yi, current_tab.px_x, current_tab.px_y)
-            # jeśli "Anuluj", nie rób nic
+                tab1 = self.tabs.widget(idx1)
+                tab2 = self.tabs.widget(idx2)
+
+            tab1.setGridData(scan1_aligned_data)
+            tab2.setGridData(scan2_aligned_data)
+
 
         # Dialog wyboru zakładek
         dialog = QtWidgets.QDialog(self)
@@ -523,18 +534,12 @@ class MainWindow(QtWidgets.QMainWindow):
         tab1 = self.tabs.widget(idx1)
         tab2 = self.tabs.widget(idx2)
 
-        # Teraz pobieramy gridy i przekazujemy do narzędzia różnicowego
-        grid1 = tab1.grid
-        grid2 = tab2.grid
-
-        # --- Tu otwieramy okno narzędzia różnicowego ---
-        self.viewer = OverlayViewer(
-            grid1, grid2,
-            vmin1=tab1.hist_min_line.value(), vmax1=tab1.hist_max_line.value(),
-            vmin2=tab2.hist_min_line.value(), vmax2=tab2.hist_max_line.value(),
-            on_accept=receive_aligned_grids
+        self.viewer = OverlayViewer( 
+            tab1.getGridData(), 
+            tab2.getGridData(),
+            on_accept=partial(receive_aligned_grids, idx1=idx1, idx2=idx2)
         )
-        
+
         self.viewer.setWindowTitle(f"Porównanie: {names[idx1]} vs {names[idx2]}")
         self.viewer.show()
 
@@ -571,8 +576,13 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Błąd", "Wybierz dwa różne skany!")
             return
 
-        grid1 = self.tabs.widget(idx1).grid
-        grid2 = self.tabs.widget(idx2).grid
+        tab1 = self.tabs.widget(idx1)
+        tab2 = self.tabs.widget(idx2)
+
+        # grid1 = tab1.grid
+        # grid2 = tab2.grid
+        grid1 = tab1.masked
+        grid2 = tab2.masked
 
         # Sprawdzenie rozmiarów
         if grid1.shape != grid2.shape:
@@ -591,6 +601,9 @@ class MainWindow(QtWidgets.QMainWindow):
             grid1 = grid1[:h, :w]
             grid2 = grid2[:h, :w]
 
+        # viewer = ProfileViewer()
+        # viewer.set_data(grid1, grid2, tab1.px_x, tab1.px_y, tab2.px_x, tab2.px_y)
+        # viewer.show()
         # --- Uruchom ProfileViewer z przekazaniem danych ---
         # Możesz tu dynamicznie zaimportować profilViewer lub mieć własny wrapper:
         from profileViewer import ProfileViewer
@@ -619,6 +632,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "valid_mask": viewer.valid_mask,
             "adjusted_grid_corrected": viewer.adjusted_grid_corrected,
         })
+
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)

@@ -156,7 +156,6 @@ class Profile3DWindow(QtWidgets.QWidget):
         self.view.setCameraPosition(pos=QtGui.QVector3D(xc, yc, zc))
 
 
-
     def update_data(self, reference_grid, adjusted_grid, line_points=None, separation=0):
         """
         Aktualizuje dane w oknie 3D: czyści stare elementy i rysuje nowe na podstawie przekazanych danych.

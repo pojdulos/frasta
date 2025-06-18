@@ -2,26 +2,31 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
+from gridData import GridData        
+
 class OverlayViewer(QtWidgets.QWidget):
-    def __init__(self, scan1, scan2, vmin1=None, vmax1=None, vmin2=None, vmax2=None, on_accept=None):
+    def __init__(self, scan1_data: GridData, scan2_data: GridData, on_accept=None):
         super().__init__()
 
         self.create_gui()
 
         self.on_accept = on_accept
 
-        
-        self.scan1 = scan1
-        self.scan2 = scan2
-        self._orig_scan1 = scan1.copy()
-        self._orig_scan2 = scan2.copy()
+        self.scan1_data = scan1_data
+        self.scan2_data = scan2_data
+
+        self.scan1 = scan1_data.grid
+        self.scan2 = scan2_data.grid
+
+        self._orig_scan1 = self.scan1.copy()
+        self._orig_scan2 = self.scan2.copy()
 
 
         self._last_diff_image = None   # oryginalna różnica (przed maskowaniem)
 
         # Obrazy
-        self.img1 = pg.ImageItem(scan1)
-        self.img2 = pg.ImageItem(scan2)
+        self.img1 = pg.ImageItem(self.scan1)
+        self.img2 = pg.ImageItem(self.scan2)
         self.img2.setOpacity(0.5)
 
         self.viewbox.addItem(self.img1)
@@ -34,20 +39,20 @@ class OverlayViewer(QtWidgets.QWidget):
                 return 0.0, 1.0  # domyślne wartości, jeśli wszystko było złe
             return np.min(arr), np.max(arr)
 
-        vmin1_, vmax1_ = safe_minmax(scan1)
-        vmin2_, vmax2_ = safe_minmax(scan2)
+        vmin1_, vmax1_ = safe_minmax(self.scan1)
+        vmin2_, vmax2_ = safe_minmax(self.scan2)
 
-        self.vmin1 = vmin1 if vmin1 is not None else vmin1_
-        self.vmax1 = vmax1 if vmax1 is not None else vmax1_
-        self.vmin2 = vmin2 if vmin2 is not None else vmin2_
-        self.vmax2 = vmax2 if vmax2 is not None else vmax2_
+        self.vmin1 = scan1_data.vmin if scan1_data.vmin is not None else vmin1_
+        self.vmax1 = scan1_data.vmax if scan1_data.vmax is not None else vmax1_
+        self.vmin2 = scan2_data.vmin if scan2_data.vmin is not None else vmin2_
+        self.vmax2 = scan2_data.vmax if scan2_data.vmax is not None else vmax2_
 
         self.img1.setLevels((self.vmin1, self.vmax1))
         self.img2.setLevels((self.vmin2, self.vmax2))
 
         # zapamiętaj siatki jako atrybuty
-        self.original_scan1 = scan1
-        self.original_scan2 = scan2
+        self.original_scan1 = self.scan1
+        self.original_scan2 = self.scan2
 
         # Połączenia
         self.slider_tx.valueChanged.connect(self.updateTransform)
@@ -236,11 +241,9 @@ class OverlayViewer(QtWidgets.QWidget):
 
         QtWidgets.QMessageBox.information(self, "Zapisano", f"Zapisano do pliku:\n{path}")
 
-    
+
+
     def accept_result(self):
-        # pobierz aktualne dopasowane siatki, np. po transformacji
-        # tutaj self.scan2 to oryginał, a self.img2.image to może być obraz po transformacji (sprawdź!)
-        # dla uproszczenia zakładamy, że masz przetransformowaną wersję jako self.img2.image (lub inny atrybut)
         from scipy.ndimage import affine_transform
 
         qt_transform = self.img2.transform()
@@ -259,15 +262,79 @@ class OverlayViewer(QtWidgets.QWidget):
             mode='constant',
             cval=np.nan
         )
+
         h = min(self.scan1.shape[0], scan2_trans.shape[0])
         w = min(self.scan1.shape[1], scan2_trans.shape[1])
-        scan1_cropped = self.scan1[:h, :w]
-        scan2_trans_cropped = scan2_trans[:h, :w]
 
-        # Wywołaj callback
+        data1 = GridData(
+            grid=self.scan1[:h, :w],
+            xi=self.scan1_data.xi[:w],
+            yi=self.scan1_data.yi[:h],
+            px_x=self.scan1_data.px_x,
+            px_y=self.scan1_data.px_y,
+            vmin=self.vmin1,
+            vmax=self.vmax1
+        )
+
+        data2 = GridData(
+            grid=scan2_trans[:h, :w],
+            xi=self.scan1_data.xi[:w],  # uwaga: zakładamy, że scan2 został przetransformowany do układu scan1
+            yi=self.scan1_data.yi[:h],
+            px_x=self.scan1_data.px_x,
+            px_y=self.scan1_data.px_y,
+            vmin=self.vmin2,
+            vmax=self.vmax2
+        )
+
         if self.on_accept is not None:
-            self.on_accept(scan1_cropped, scan2_trans_cropped, self.vmin1, self.vmax1, self.vmin2, self.vmax2)
+            self.on_accept(data1, data2)
+
         self.close()
+
+
+    # def accept_result(self):
+    #     # pobierz aktualne dopasowane siatki, np. po transformacji
+    #     # tutaj self.scan2 to oryginał, a self.img2.image to może być obraz po transformacji (sprawdź!)
+    #     # dla uproszczenia zakładamy, że masz przetransformowaną wersję jako self.img2.image (lub inny atrybut)
+    #     from scipy.ndimage import affine_transform
+
+    #     qt_transform = self.img2.transform()
+    #     m = np.array([
+    #         [qt_transform.m11(), qt_transform.m21(), qt_transform.m31()],
+    #         [qt_transform.m12(), qt_transform.m22(), qt_transform.m32()],
+    #         [0,                 0,                 1]
+    #     ])
+    #     affine_matrix = np.linalg.inv(m)[0:2, 0:3]
+
+    #     scan2_trans = affine_transform(
+    #         self.scan2,
+    #         matrix=affine_matrix[:, :2],
+    #         offset=affine_matrix[:, 2],
+    #         order=1,
+    #         mode='constant',
+    #         cval=np.nan
+    #     )
+    #     h = min(self.scan1.shape[0], scan2_trans.shape[0])
+    #     w = min(self.scan1.shape[1], scan2_trans.shape[1])
+    #     scan1_cropped = self.scan1[:h, :w]
+    #     scan2_trans_cropped = scan2_trans[:h, :w]
+
+    #     # Wywołaj callback
+    #     if self.on_accept is not None:
+    #         data1 = self.scan1_data
+    #         data1.grid = scan1_cropped
+    #         data1.xi = self.scan1_data.xi[:w],
+    #         data1.yi = self.scan1_data.yi[:h],
+    #         data1.vmin = self.vmin1
+    #         data1.vmax = self.vmax1
+    #         data2 = self.scan2_data
+    #         data2.grid = scan2_trans_cropped
+    #         data2.xi = self.scan1_data.xi[:w],
+    #         data2.yi = self.scan1_data.yi[:h],
+    #         data2.vmin = self.vmin2
+    #         data2.vmax = self.vmax2
+    #         self.on_accept(data1, data2)
+    #     self.close()
 
     def update_difference_map(self):
         tx = self.slider_tx.value()
@@ -362,23 +429,23 @@ class OverlayViewer(QtWidgets.QWidget):
 
 
 
-if __name__ == '__main__':
-    data = np.load("source_data/scan1_interp.npz")
-    scan1 = data['grid']
+# if __name__ == '__main__':
+#     data = np.load("source_data/scan1_interp.npz")
+#     scan1 = data['grid']
 
-    data = np.load("source_data/scan2_interp.npz")
-    scan2 = data['grid']
+#     data = np.load("source_data/scan2_interp.npz")
+#     scan2 = data['grid']
 
-    s1 = scan1 #np.where(np.isnan(scan1), np.nanmin(scan1), scan1)
-    s2 = scan2 # np.where(np.isnan(scan2), np.nanmax(scan2), scan2)
+#     s1 = scan1 #np.where(np.isnan(scan1), np.nanmin(scan1), scan1)
+#     s2 = scan2 # np.where(np.isnan(scan2), np.nanmax(scan2), scan2)
 
-    s2 = np.flipud(s2)
-    s2 = -s2
+#     s2 = np.flipud(s2)
+#     s2 = -s2
 
-    app = QtWidgets.QApplication([])
-    viewer = OverlayViewer(s1, s2)
-    viewer.setWindowTitle("Overlay Viewer with Sliders")
-    viewer.resize(800, 800)
-    viewer.show()
-    app.exec_()
+#     app = QtWidgets.QApplication([])
+#     viewer = OverlayViewer(s1, s2)
+#     viewer.setWindowTitle("Overlay Viewer with Sliders")
+#     viewer.resize(800, 800)
+#     viewer.show()
+#     app.exec_()
 

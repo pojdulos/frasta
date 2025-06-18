@@ -1,18 +1,18 @@
 import sys
 import os
 import numpy as np
-# import h5py
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
-# from scipy.ndimage import gaussian_filter
 from skimage.draw import line
-from sklearn.linear_model import LinearRegression
 from PyQt5.QtCore import QPointF
 from math import atan, degrees
-# import pyqtgraph.opengl as gl
+import numpy as np
+import h5py
+from scipy.ndimage import gaussian_filter
+from sklearn.linear_model import LinearRegression
 
 from profile3DWindow import Profile3DWindow
-#from pixelSnapViewBox import SnapImageWidget
+
 
 def compute_offset_in_center(reference, target, window_size=100):
     # Rozmiary obrazów
@@ -95,11 +95,6 @@ class ProfileWorker(QThread):
 
     def run(self):
         try:
-            import numpy as np
-            import h5py
-            from scipy.ndimage import gaussian_filter
-            from sklearn.linear_model import LinearRegression
-
             with h5py.File(self.filepath, "r") as f:
                 reference_grid = f["scan1"][:]
                 adjusted_grid = f["scan2"][:]
@@ -242,6 +237,62 @@ class ProfileViewer(QtWidgets.QMainWindow):
         self.statusBar().addPermanentWidget(self.progress_bar)
 
         # self.statusBar().showMessage("Gotowy")
+
+
+    def set_data(self, grid1, grid2, px1, py1, px2, py2):
+        self.reference_grid = grid1
+        self.adjusted_grid = grid2
+
+        self.metadata["pixel_size_x_mm"] = px1
+        self.metadata["pixel_size_y_mm"] = py1
+
+        self.reference_grid_smooth = gaussian_filter(grid1, self.sigma)
+        self.adjusted_grid_smooth = gaussian_filter(grid2, self.sigma)
+
+        self.valid_mask = ~np.isnan(self.reference_grid_smooth) & ~np.isnan(self.adjusted_grid_smooth)
+
+        self.adjusted_grid_corrected = self.adjusted_grid_smooth + np.nanmean(self.reference_grid_smooth - self.adjusted_grid_smooth)
+
+        if self.checkbox_tilt.isChecked():
+            self.adjusted_grid_corrected = remove_relative_tilt(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
+
+        self.adjusted_grid_corrected = remove_relative_offset(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
+
+        size_x_mm = self.reference_grid.shape[0] * self.metadata['pixel_size_x_mm']
+        self.plot_widget.getPlotItem().getViewBox().setRange(xRange=(0, size_x_mm))
+
+        self.progress_bar.setVisible(False)
+        self.statusBar().showMessage("Gotowy")
+
+        # Reset ROI i odśwież GUI
+        height, width = self.reference_grid_smooth.shape
+        self.x1, self.y1 = 0, 0
+        self.x2, self.y2 = width - 1, height - 1
+
+        self.redraw_roi()
+        
+        shape = self.update_plot()
+
+        self.resize_image_view(shape)
+
+        vb = self.image_view.getView()
+        vb.setAspectLocked(True)
+
+        vb.setLimits( 
+            yMin=0, yMax=shape[0]-1,
+            xMin=0, xMax=shape[1]-1 
+        )
+        
+        vb.setRange(
+            xRange=(0, shape[1]-1),
+            yRange=(0, shape[0]-1),
+            padding=0
+        )
+
+        QtWidgets.QApplication.restoreOverrideCursor()
+
+
+
 
 
     def show_preview(self, fragment, title="Podgląd wycinka"):

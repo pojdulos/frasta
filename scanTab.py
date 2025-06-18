@@ -8,6 +8,7 @@ import time
 from functools import wraps
 
 from responsiveInfiniteLine import ResponsiveInfiniteLine
+from gridData import GridData
 
 def measure_time(func):
     @wraps(func)
@@ -103,14 +104,41 @@ class ScanTab(QtWidgets.QWidget):
         self.zero_point_mode = True
         # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
 
-    def get_data(self):
-        return {
-            'grid': self.grid,
-            'xi': self.xi,
-            'yi': self.yi,
-            'px_x': self.px_x,
-            'px_y': self.px_y
-        }
+    def getGridData(self):
+        data = GridData(
+            self.grid,
+            self.xi,
+            self.yi,
+            self.px_x,
+            self.px_y,
+            float(np.min(self.grid)),
+            float(np.max(self.grid))
+        )
+        if hasattr(self, 'hist_min_line') and hasattr(self, 'hist_max_line'):
+            data.vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
+            data.vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
+        return data
+    
+    def setGridData(self, data: GridData):
+        self.grid = data.grid
+        self.xi = data.xi
+        self.yi = data.yi
+        self.px_x = data.px_x
+        self.px_y = data.px_y
+        self.update_image()
+        self.update_histogram()
+        self.hist_min_line.setValue(data.vmin)
+        self.hist_max_line.setValue(data.vmax)
+
+    
+    # def get_data(self):
+    #     return {
+    #         'grid': self.grid,
+    #         'xi': self.xi,
+    #         'yi': self.yi,
+    #         'px_x': self.px_x,
+    #         'px_y': self.px_y
+    #     }
 
 
     def set_data(self, grid, xi, yi, px_x, px_y):
@@ -184,33 +212,6 @@ class ScanTab(QtWidgets.QWidget):
         self.grid = -self.grid
         self.update_image()
 
-    # def fill_holes(self, parent=None):
-    #     if self.grid is None: #or not self.seed_points:
-    #         QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
-    #         return
-
-    #     tst = np.isnan(self.grid)
-    #     for (iy, ix) in self.seed_points:
-    #         filled = flood(tst, seed_point=(iy, ix))
-    #         tst[filled] = False
-
-    #     grid_x, grid_y = np.meshgrid(self.xi, self.yi)
-    #     interp_points = np.column_stack((grid_x[tst], grid_y[tst]))
-
-    #     if self.orig_data:
-    #         x, y, z = self.orig_data
-    #         interp_values = griddata((x, y), z, interp_points, method='nearest')
-    #     else:
-    #         valid = ~np.isnan(self.grid)
-    #         interp_values = griddata(
-    #             (grid_x[valid], grid_y[valid]),
-    #             self.grid[valid],
-    #             interp_points,
-    #             method='nearest'
-    #         )
-    #     self.grid[tst] = interp_values
-    #     self.update_image()
-
     def fill_holes(self, parent=None):
         if self.grid is None:
             QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
@@ -221,7 +222,16 @@ class ScanTab(QtWidgets.QWidget):
             filled = flood(tst, seed_point=(iy, ix))
             tst[filled] = False
 
+        print("grid.shape:", self.grid.shape)
+        print("xi len:", len(self.xi))
+        print("yi len:", len(self.yi))
+
         grid_x, grid_y = np.meshgrid(self.xi, self.yi)
+
+        print("grid_x.shape:", grid_x.shape)
+        print("grid_y.shape:", grid_y.shape)
+        print("tst.shape:", tst.shape)
+
         interp_points = np.column_stack((grid_x[tst], grid_y[tst]))
 
         valid = ~np.isnan(self.grid)
