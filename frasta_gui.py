@@ -84,8 +84,65 @@ class MainWindow(QtWidgets.QMainWindow):
         self.create_menubar()
         self.create_toolbar()
 
+        self.shared_roi = None  # będzie przechowywać jedną instancję CircleROI
+
         self.worker = None
         self.thread = None
+
+        self.tabs.currentChanged.connect(self.move_roi_to_current_tab)
+
+    def apply_roi_mask(self, inside):
+        tab = self.current_tab()
+        if tab is None or tab.grid is None or self.shared_roi is None or not self.shared_roi.isVisible():
+            return
+        pos = self.shared_roi.pos()
+        size = self.shared_roi.size()
+        cx = pos.x() + size[0]/2
+        cy = pos.y() + size[1]/2
+        r = size[0]/2
+        h, w = tab.grid.shape
+        Y, X = np.ogrid[:h, :w]
+        mask = ((X - cx) ** 2 + (Y - cy) ** 2) <= r**2
+        if inside:
+            tab.set_mask(~mask)
+        else:
+            tab.set_mask(mask)
+
+    def del_inside_mask(self):
+        self.apply_roi_mask(True)
+
+    def del_outside_mask(self):
+        self.apply_roi_mask(False)
+
+    def move_roi_to_current_tab(self, idx):
+        if self.shared_roi is None or not self.shared_roi.isVisible():
+            return
+        # Usuń ROI z poprzedniego image_view
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            tab.image_view.getView().removeItem(self.shared_roi)
+        # Dodaj do bieżącego
+        tab = self.tabs.widget(idx)
+        tab.image_view.getView().addItem(self.shared_roi)
+        self.shared_roi.show()
+
+    def show_circle_roi(self):
+        tab = self.current_tab()
+        if tab is None or tab.grid is None:
+            return
+        
+        if not self.shared_roi is None and self.shared_roi.isVisible():
+            self.shared_roi.setVisible(False)
+            return
+        
+        if self.shared_roi is None:
+            import pyqtgraph as pg
+            h, w = tab.grid.shape
+            self.shared_roi = pg.CircleROI([w//2-50, h//2-50], [100, 100], pen=pg.mkPen('g', width=2))
+            self.shared_roi.setZValue(100)
+            # Dodaj slot do wykrywania zmian, jeśli chcesz
+        tab.image_view.getView().addItem(self.shared_roi)
+        self.shared_roi.show()
 
     def close_tab(self, index):
         widget = self.tabs.widget(index)
@@ -109,6 +166,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "about": QtWidgets.QAction("About...", self),
             "exit": QtWidgets.QAction("Exit", self),
         }
+
+        # create_actions
+        self.actions["del_outside"] = QtWidgets.QAction("outside of the mask", self)
+        self.actions["del_inside"] = QtWidgets.QAction("inside of the mask", self)
+        self.actions["show_mask"] = QtWidgets.QAction("Show/hide the mask", self)
+
 
 
         self.actions["open"].setIcon(QIcon("icons/icons8-open-file1-50.png"))
@@ -141,6 +204,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["about"].triggered.connect(self.show_about_dialog)
         self.actions["exit"].triggered.connect(self.close)
 
+        # connect_actions
+        self.actions["del_outside"].triggered.connect(self.del_outside_mask)
+        self.actions["del_inside"].triggered.connect(self.del_inside_mask)
+        self.actions["show_mask"].triggered.connect(self.show_circle_roi)
+
     def create_menubar(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("&File")
@@ -154,7 +222,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         file_menu.addSeparator()
         file_menu.addAction(self.actions["exit"])
-        
+
+        edit_menu = menubar.addMenu("&Edit")        
+        edit_menu.addAction(self.actions["show_mask"])
+        delete_menu = QtWidgets.QMenu("delete", self)
+        delete_menu.addAction(self.actions["del_outside"])
+        delete_menu.addAction(self.actions["del_inside"])
+        edit_menu.addMenu(delete_menu)
+
+
         actions_menu = menubar.addMenu("Scan &Actions")
         actions_menu.addAction(self.actions["fill"])
         actions_menu.addAction(self.actions["flip"])
@@ -187,12 +263,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addAction(self.actions["about"])
         self.toolbar.addAction(self.actions["exit"])
 
+    def create_circle_mask(self, shape, center, radius):
+        Y, X = np.ogrid[:shape[0], :shape[1]]
+        dist = np.sqrt((X - center[0]) ** 2 + (Y - center[1]) ** 2)
+        return dist <= radius
+
+
     def view3d(self):
         tab = self.current_tab()
         if tab:
             from simple3DWindow import Simple3DWindow
-            win = Simple3DWindow(tab.grid, parent=self)
-            win.exec_()
+            if getattr(self, "_win3d", None) is None:
+                self._win3d = Simple3DWindow(tab.grid)
+            else:
+                #self._win3d.hide()
+                self._win3d.update_data(tab.grid)
+            self._win3d.show()
+            self._win3d.raise_()
+            self._win3d.activateWindow()
 
     def toggle_colormap_current_tab(self):
         tab = self.current_tab()

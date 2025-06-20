@@ -59,6 +59,7 @@ class ScanTab(QtWidgets.QWidget):
 
         self.image_view.getView().scene().sigMouseClicked.connect(self.mouse_clicked)
 
+
     def update_histogram(self):
         if self.grid is None:
             return
@@ -108,6 +109,12 @@ class ScanTab(QtWidgets.QWidget):
     def set_tilt_mode(self):
         self.tilt_mode = True
         # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
+
+    def set_mask(self, mask, inside=True):
+        if self.grid is not None:
+            self.grid = np.where(mask, self.grid, np.nan)
+            self.update_image()
+            self.update_histogram()
 
     def getGridData(self):
         data = GridData(
@@ -306,7 +313,85 @@ class ScanTab(QtWidgets.QWidget):
         c = model.intercept_
 
         return a, b, c
-    
+
+
+    def fit_plane_to_grid_robust(self, grid, x, y, s=100):
+        h, w = grid.shape
+        xmin = max(0, x - s)
+        xmax = min(w, x + s + 1)
+        ymin = max(0, y - s)
+        ymax = min(h, y + s + 1)
+
+        window = grid[ymin:ymax, xmin:xmax]
+        yy, xx = np.mgrid[ymin:ymax, xmin:xmax]
+        zz = window
+
+        X = xx.flatten()
+        Y = yy.flatten()
+        Z = zz.flatten()
+        mask = ~np.isnan(Z)
+        X = X[mask]
+        Y = Y[mask]
+        Z = Z[mask]
+
+        if len(Z) < 10:
+            raise ValueError("Zbyt mało ważnych danych do dopasowania płaszczyzny")
+
+        A = np.vstack((X, Y)).T
+
+        # Tu używamy RANSAC, żeby być odpornym na odstające wartości
+        from sklearn.linear_model import RANSACRegressor, LinearRegression
+        base_model = LinearRegression()
+        model = RANSACRegressor(base_model, min_samples=100, residual_threshold=200.0, random_state=42)
+        model.fit(A, Z)
+        a, b = model.estimator_.coef_
+        c = model.estimator_.intercept_
+
+        return a, b, c
+
+    def fit_plane_to_grid_median_filter(self, grid, x, y, s=100, outlier_thresh=300.0):
+        h, w = grid.shape
+        xmin = max(0, x - s)
+        xmax = min(w, x + s + 1)
+        ymin = max(0, y - s)
+        ymax = min(h, y + s + 1)
+
+        window = grid[ymin:ymax, xmin:xmax]
+        yy, xx = np.mgrid[ymin:ymax, xmin:xmax]
+        zz = window
+
+        X = xx.flatten()
+        Y = yy.flatten()
+        Z = zz.flatten()
+        mask = ~np.isnan(Z)
+        X = X[mask]
+        Y = Y[mask]
+        Z = Z[mask]
+
+        if len(Z) < 10:
+            raise ValueError("Zbyt mało ważnych danych do dopasowania płaszczyzny")
+
+        # Usuwanie wartości odstających na podstawie mediany
+        z_median = np.median(Z)
+        mad = np.median(np.abs(Z - z_median))  # Median Absolute Deviation
+        # Pozostaw tylko te punkty, które nie są bardzo daleko od mediany
+        robust_mask = np.abs(Z - z_median) < outlier_thresh * mad
+        X = X[robust_mask]
+        Y = Y[robust_mask]
+        Z = Z[robust_mask]
+
+        if len(Z) < 10:
+            raise ValueError("Za mało danych po odrzuceniu outlierów")
+
+        A = np.vstack((X, Y)).T
+        from sklearn.linear_model import LinearRegression
+        model = LinearRegression().fit(A, Z)
+        a, b = model.coef_
+        c = model.intercept_
+
+        return a, b, c
+
+
     def mouse_clicked(self, event):
         if self.grid is None:
             return
@@ -338,15 +423,15 @@ class ScanTab(QtWidgets.QWidget):
             
             elif self.tilt_mode:
                 self.tilt_mode = False
-                a, b, c = self.fit_plane_to_grid(self.grid, x, y, s=100)
-
+                # a, b, c = self.fit_plane_to_grid_robust(self.grid, x, y, s=100)
+                a, b, c = self.fit_plane_to_grid_median_filter(self.grid, x, y, s=500, outlier_thresh=300.0)
                 # Możesz teraz utworzyć macierz tej samej wielkości co grid:
                 rows, cols = self.grid.shape
                 yy, xx = np.mgrid[0:rows, 0:cols]
                 plane = a * xx + b * yy + c
 
                 # Korekta:
-                self.grid = self.grid - plane
+                self.grid = self.grid + plane
                 self.update_image()
                 self.update_histogram()
                 return
@@ -387,3 +472,36 @@ class ScanTab(QtWidgets.QWidget):
             self.image_view.setImage(self.masked, autoLevels=True, autoRange=False)
         self.seed_points = []
 
+    def update_image2(self, vmin=None, vmax=None):
+        if self.grid is not None:
+            if vmin is None or vmax is None:
+                if hasattr(self, 'hist_min_line') and hasattr(self, 'hist_max_line'):
+                    vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
+                    vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
+                else:
+                    vmin = float(np.min(self.grid))
+                    vmax = float(np.max(self.grid))
+
+            data = self.grid.T
+            self.masked = data.copy()
+            self.masked[(self.masked < vmin) | (self.masked > vmax)] = np.nan
+
+            # Specjalna wartość powyżej vmax
+            special = vmax + max(1.0, (vmax - vmin) * 0.01)
+            masked_for_vis = self.masked.copy()
+            masked_for_vis[np.isnan(masked_for_vis)] = special
+
+            image_item = self.image_view.getImageItem()
+            if self.is_colormap:
+                lut = pg.colormap.get('turbo').getLookupTable(0.0, 1.0, 256)
+                lut = np.vstack([lut, [255, 0, 0, 255]])  # czerwony na końcu
+                image_item.setLookupTable(lut)
+                # Kluczowe: levels od vmin do special
+                self.image_view.setImage(masked_for_vis, autoLevels=False, levels=(vmin, special), autoRange=False)
+            else:
+                # W wersji gray nie podświetlisz, ale możesz np. zrobić specjalny kolor: 255
+                masked_for_vis_gray = self.masked.copy()
+                masked_for_vis_gray[np.isnan(masked_for_vis_gray)] = 255
+                self.image_view.setImage(masked_for_vis_gray, autoLevels=True, autoRange=False)
+
+        self.seed_points = []
