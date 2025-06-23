@@ -10,6 +10,9 @@
 * instal packages:
 `.venv\Scripts\pip.exe install -r requirements.txt`
 
+* generating of requirements.txt:
+`.venv\Scripts\pip.exe freeze > requirements.txt`
+
 ### Tested with:
 * `python 3.13.3`
 * `h5py==3.13.0`
