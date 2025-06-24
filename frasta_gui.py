@@ -156,6 +156,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "save_scan": QtWidgets.QAction("Save current scan...", self),
             "save_multi": QtWidgets.QAction("Save multiple scans...", self),
             "fill": QtWidgets.QAction("Fill holes", self),
+            "repair": QtWidgets.QAction("Remove holes and outliers", self),
             "flip": QtWidgets.QAction("Flip & reverse", self),
             "zero": QtWidgets.QAction("Set zero point", self),
             "tilt": QtWidgets.QAction("Set tilt", self),
@@ -194,6 +195,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["save_scan"].triggered.connect(self.save_single_scan)
         self.actions["save_multi"].triggered.connect(self.save_multiple_scans)
         self.actions["fill"].triggered.connect(self.fill_holes)
+        self.actions["repair"].triggered.connect(self.repair_grid)
         self.actions["flip"].triggered.connect(self.flip_scan)
         self.actions["zero"].triggered.connect(self.set_zero_point_mode)
         self.actions["tilt"].triggered.connect(self.set_tilt_mode)
@@ -233,6 +235,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         actions_menu = menubar.addMenu("Scan &Actions")
         actions_menu.addAction(self.actions["fill"])
+        actions_menu.addAction(self.actions["repair"])
         actions_menu.addAction(self.actions["flip"])
         actions_menu.addAction(self.actions["zero"])
         actions_menu.addAction(self.actions["colormap"])
@@ -286,6 +289,15 @@ class MainWindow(QtWidgets.QMainWindow):
         tab = self.current_tab()
         if tab:
             tab.toggle_colormap()
+
+
+    def repair_grid(self):
+        tab = self.current_tab()
+        if tab:
+            if self.shared_roi and self.shared_roi.isVisible:
+                tab.repair_grid(roi=self.shared_roi)
+            else:
+                tab.repair_grid(roi=None)
 
     def set_zero_point_mode(self):
         tab = self.current_tab()
@@ -705,41 +717,18 @@ class MainWindow(QtWidgets.QMainWindow):
             grid1 = grid1[:h, :w]
             grid2 = grid2[:h, :w]
 
-        # viewer = ProfileViewer()
-        # viewer.set_data(grid1, grid2, tab1.px_x, tab1.px_y, tab2.px_x, tab2.px_y)
-        # viewer.show()
-        # --- Uruchom ProfileViewer z przekazaniem danych ---
-        # Możesz tu dynamicznie zaimportować profilViewer lub mieć własny wrapper:
-        from profileViewer import ProfileViewer
         viewer = ProfileViewer()
-        viewer.reference_grid = grid1
-        viewer.adjusted_grid = grid2
-        # wygładzone wersje na początek
-        from scipy.ndimage import gaussian_filter
-        sigma = 5.0  # możesz dodać pole wyboru
-        viewer.reference_grid_smooth = gaussian_filter(grid1, sigma)
-        viewer.adjusted_grid_smooth = gaussian_filter(grid2, sigma)
-        # maska wspólna
-        viewer.valid_mask = ~np.isnan(viewer.reference_grid_smooth) & ~np.isnan(viewer.adjusted_grid_smooth)
-        # domyślna korekcja
-        viewer.adjusted_grid_corrected = viewer.adjusted_grid_smooth + np.nanmean(viewer.reference_grid_smooth - viewer.adjusted_grid_smooth)
-        # skopiuj też metadane, jeśli masz w ScanTab
-        if hasattr(self.tabs.widget(idx1), "metadata"):
-            viewer.metadata = self.tabs.widget(idx1).metadata
-        # dokończ GUI i pokaż
         viewer.show()
-        viewer.on_worker_finished({
-            "reference_grid": grid1,
-            "adjusted_grid": grid2,
-            "reference_grid_smooth": viewer.reference_grid_smooth,
-            "adjusted_grid_smooth": viewer.adjusted_grid_smooth,
-            "valid_mask": viewer.valid_mask,
-            "adjusted_grid_corrected": viewer.adjusted_grid_corrected,
-        })
+        viewer.set_data(grid1, grid2, tab1.px_x, tab1.px_y, tab2.px_x, tab2.px_y)
 
 
-if __name__ == "__main__":
+
+def run():
     app = QtWidgets.QApplication(sys.argv)
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    run()
+    

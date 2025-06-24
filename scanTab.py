@@ -4,21 +4,11 @@ import pyqtgraph as pg
 from skimage.segmentation import flood
 from scipy.interpolate import griddata
 import trimesh
-import time
-from functools import wraps
 
 from responsiveInfiniteLine import ResponsiveInfiniteLine
 from gridData import GridData
-
-def measure_time(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.perf_counter()
-        result = func(*args, **kwargs)
-        end = time.perf_counter()
-        print(f">>> {func.__name__}() took {end - start:.4f} seconds")
-        return result
-    return wrapper
+from helpers import fill_holes, remove_outliers, nan_aware_gaussian
+from scipy.ndimage import gaussian_filter
 
 class ScanTab(QtWidgets.QWidget):
     def __init__(self, parent=None):
@@ -160,7 +150,7 @@ class ScanTab(QtWidgets.QWidget):
         self.yi = yi
         self.px_x = px_x
         self.px_y = px_y
-        #print(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
+        print(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
         self.update_image()
         self.update_histogram()
 
@@ -223,6 +213,84 @@ class ScanTab(QtWidgets.QWidget):
         self.grid = np.fliplr(self.grid)
         self.grid = -self.grid
         self.update_image()
+
+
+    def repair_grid(self, roi=None):
+        sigma = 25
+        threshold = 100
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Select actions")
+        layout = QtWidgets.QVBoxLayout(dialog)
+        ch_sigma = QtWidgets.QLabel("sigma:")
+        ed_sigma = QtWidgets.QSpinBox()
+        ed_sigma.setRange(0,100)
+        ed_sigma.setValue(sigma)
+        ch_thresh = QtWidgets.QLabel("threshold:")
+        ed_thresh = QtWidgets.QSpinBox()
+        ed_thresh.setRange(0,10000)
+        ed_thresh.setValue(threshold)
+
+        ch_newtab = QtWidgets.QCheckBox("create new tab:")
+        lbl_newtab = QtWidgets.QLabel("tab label:")
+        ed_label = QtWidgets.QLineEdit("name")
+
+        ch_newtab.setDisabled(True)
+        ed_label.setDisabled(True)
+
+        ok_btn = QtWidgets.QPushButton("OK")
+        cancel_btn = QtWidgets.QPushButton("Anuluj")
+
+        hl = QtWidgets.QHBoxLayout()
+        hl.addWidget(ok_btn)
+        hl.addWidget(cancel_btn)
+
+        fl = QtWidgets.QFormLayout()
+        fl.addRow(ch_sigma,ed_sigma)
+        fl.addRow(ch_thresh,ed_thresh)
+        fl.addWidget(ch_newtab)
+        fl.addRow(lbl_newtab,ed_label)
+
+        layout.addLayout(fl)
+        layout.addLayout(hl)
+
+        def accept():
+            dialog.accept()
+        ok_btn.clicked.connect(accept)
+        cancel_btn.clicked.connect(dialog.reject)
+
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+
+        h, w = self.grid.shape
+
+        if roi and roi.isVisible():
+            pos = roi.pos()
+            size = roi.size()
+            cx = pos.x() + size[0] / 2
+            cy = pos.y() + size[1] / 2
+            r = size[0] / 2
+            Y, X = np.ogrid[:h, :w]
+            mask = ((X - cx) ** 2 + (Y - cy) ** 2) <= r**2
+        else:
+            mask = None  # brak ograniczenia
+
+        sigma = ed_sigma.value()
+        threshold = ed_thresh.value()
+
+        grid_filled = fill_holes(self.grid, mask=mask)
+        grid_smooth = nan_aware_gaussian(grid_filled, sigma, mask=mask)
+        grid_cleaned = remove_outliers(grid_filled, grid_smooth, threshold, mask=mask)
+
+        if mask is not None:
+            self.grid[mask] = grid_cleaned[mask]
+        else:
+            self.grid = grid_cleaned
+
+        self.update_image()
+        QtWidgets.QApplication.restoreOverrideCursor()
 
     def fill_holes(self, parent=None):
         if self.grid is None:
@@ -505,3 +573,9 @@ class ScanTab(QtWidgets.QWidget):
                 self.image_view.setImage(masked_for_vis_gray, autoLevels=True, autoRange=False)
 
         self.seed_points = []
+
+
+if __name__ == "__main__":
+    from frasta_gui import run
+    run()
+    

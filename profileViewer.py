@@ -12,59 +12,7 @@ from scipy.ndimage import gaussian_filter
 from sklearn.linear_model import LinearRegression
 
 from profile3DWindow import Profile3DWindow
-
-
-def compute_offset_in_center(reference, target, window_size=100):
-    # Rozmiary obrazów
-    rows, cols = reference.shape
-    # Środek
-    center_row = rows // 2
-    center_col = cols // 2
-    half = window_size // 2
-    # Wytnij okno centralne
-    ref_central = reference[center_row-half:center_row+half, center_col-half:center_col+half]
-    target_central = target[center_row-half:center_row+half, center_col-half:center_col+half]
-    # Maska: tylko tam, gdzie oba są nie NaN
-    mask = ~np.isnan(ref_central) & ~np.isnan(target_central)
-    diff = ref_central - target_central
-    masked_diff = diff[mask]
-    if masked_diff.size == 0:
-        raise ValueError("Brak ważnych danych w centralnym oknie")
-    offset = np.mean(masked_diff)
-    print(f'Offset w centralnym obszarze {window_size}x{window_size}: {offset:.2f}')
-    return offset
-
-def remove_relative_offset(reference, target, mask):
-    offset = compute_offset_in_center(reference, target, window_size=1000)
-    return target + offset
-
-# def remove_relative_offset(reference, target, mask):
-#     #mask = ~np.isnan(reference) & ~np.isnan(target)
-#     difference = reference - target
-#     masked_diff = difference[mask]
-#     if masked_diff.size == 0:
-#         raise ValueError("Brak ważnych danych do obliczenia offsetu")
-#     offset = np.mean(masked_diff)
-#     print('Wyznaczony offset:', offset)
-#     return target + offset
-
-def remove_relative_tilt(reference, target, mask):
-    difference = reference - target
-    rows, cols = difference.shape
-    X, Y = np.meshgrid(np.arange(cols), np.arange(rows))
-    XX = X[mask].flatten()
-    YY = Y[mask].flatten()
-    ZZ = difference[mask].flatten()
-    valid_mask = ~np.isnan(ZZ)
-    XX, YY, ZZ = XX[valid_mask], YY[valid_mask], ZZ[valid_mask]
-    if len(ZZ) == 0:
-        raise ValueError("Brak ważnych danych do regresji - wszystkie punkty zawierały NaN")
-    features = np.vstack((XX, YY)).T
-    model = LinearRegression().fit(features, ZZ)
-    tilt_plane = model.predict(np.vstack((X.flatten(), Y.flatten())).T).reshape(difference.shape)
-    return target + tilt_plane
-
-
+from helpers import remove_relative_offset, remove_relative_tilt
 
 def create_image_view():
     view = pg.ImageView()
@@ -74,32 +22,28 @@ def create_image_view():
     # view.getView().setBackgroundColor('w')
     return view
 
-def resource_path(relative_path):
-    """Zwraca absolutną ścieżkę do zasobu (działa i w exe, i w .py)"""
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
-
 from PyQt5.QtCore import QThread, pyqtSignal
 
 class ProfileWorker(QThread):
-    # Sygnały (możesz dodać więcej, np. postęp)
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
 
-    def __init__(self, filepath, sigma, metadata):
+    def __init__(self, filepath, sigma):
         super().__init__()
         self.filepath = filepath
         self.sigma = sigma
-        self.metadata = metadata
 
     def run(self):
         try:
             with h5py.File(self.filepath, "r") as f:
                 reference_grid = f["scan1"][:]
                 adjusted_grid = f["scan2"][:]
-            reference_grid_smooth = gaussian_filter(reference_grid, sigma=self.sigma)
-            adjusted_grid_smooth = gaussian_filter(adjusted_grid, sigma=self.sigma)
+            
+            # reference_grid_smooth = gaussian_filter(reference_grid, sigma=self.sigma)
+            # adjusted_grid_smooth = gaussian_filter(adjusted_grid, sigma=self.sigma)
+            reference_grid_smooth = reference_grid
+            adjusted_grid_smooth = adjusted_grid
+            
             valid_mask = ~np.isnan(reference_grid_smooth) & ~np.isnan(adjusted_grid_smooth)
             offset_correction = np.nanmean(reference_grid_smooth - adjusted_grid_smooth)
             adjusted_grid_corrected = adjusted_grid_smooth + offset_correction
@@ -126,10 +70,11 @@ class ProfileViewer(QtWidgets.QMainWindow):
         self.setGeometry(100, 100, 1000, 600)
 
         # --- PARAMETRY, metadane i domyślna ścieżka ---
-        self.metadata = {
-            "pixel_size_x_mm": 0.00138,
-            "pixel_size_y_mm": 0.00138,
-        }
+
+        # domyslnie w mikrometrach
+        self.ref_pixel_um = QPointF(1.0, 1.0)
+        self.adj_pixel_um = QPointF(1.0, 1.0)
+
         self.sigma = 5.0
         self.separation = 0
 
@@ -239,15 +184,94 @@ class ProfileViewer(QtWidgets.QMainWindow):
         # self.statusBar().showMessage("Gotowy")
 
 
-    def set_data(self, grid1, grid2, px1, py1, px2, py2):
+    def load_new_data(self):
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Wybierz plik HDF5", "", "HDF5 files (*.h5);;Wszystkie pliki (*)")
+        if fname:
+            self.load_data_from_file(fname)
+
+    def load_data_from_file(self, fname):
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        self.centralWidget().setEnabled(False)
+        self.open_action.setEnabled(False)
+        self.statusBar().showMessage("Wczytywanie danych...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.worker = ProfileWorker(fname, self.sigma)
+        self.worker.finished.connect(self.on_worker_finished)
+        self.worker.error.connect(self.on_worker_error)
+        self.worker.start()
+
+    def on_worker_error(self, msg):
+        self.progress_bar.setVisible(False)
+        QtWidgets.QApplication.restoreOverrideCursor()
+        self.statusBar().showMessage("Błąd podczas przetwarzania!")
+        QtWidgets.QMessageBox.critical(self, "Błąd", "Błąd podczas przetwarzania danych:\n" + msg)
+
+    def on_worker_finished(self, result):
+        # Zaktualizuj wszystkie dane na podstawie wyniku z wątku
+        self.centralWidget().setEnabled(True)
+        self.open_action.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.statusBar().showMessage("Gotowy")
+
+        self.reference_grid = result["reference_grid"]
+        self.adjusted_grid = result["adjusted_grid"]
+        self.reference_grid_smooth = result["reference_grid_smooth"]
+        self.adjusted_grid_smooth = result["adjusted_grid_smooth"]
+        self.valid_mask = result["valid_mask"]
+        self.adjusted_grid_corrected = result["adjusted_grid_corrected"]
+        if self.checkbox_tilt.isChecked():
+            self.adjusted_grid_corrected = remove_relative_tilt(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
+
+        self.adjusted_grid_corrected = remove_relative_offset(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
+
+        size_x_mm = self.reference_grid.shape[1] * self.ref_pixel_um.x() / 1000.0 # konwertuję do mm
+        
+        self.plot_widget.getPlotItem().getViewBox().setRange(xRange=(0, size_x_mm))
+
+        self.progress_bar.setVisible(False)
+        self.statusBar().showMessage("Gotowy")
+
+        # Reset ROI i odśwież GUI
+        height, width = self.reference_grid_smooth.shape
+        self.x1, self.y1 = 0, 0
+        self.x2, self.y2 = width - 1, height - 1
+
+        self.redraw_roi()
+        
+        shape = self.update_plot()
+
+        self.resize_image_view(shape)
+
+        vb = self.image_view.getView()
+        vb.setAspectLocked(True)
+
+        vb.setLimits( 
+            yMin=0, yMax=shape[0]-1,
+            xMin=0, xMax=shape[1]-1 
+        )
+        
+        vb.setRange(
+            xRange=(0, shape[1]-1),
+            yRange=(0, shape[0]-1),
+            padding=0
+        )
+
+        QtWidgets.QApplication.restoreOverrideCursor()
+
+
+
+    def set_data(self, grid1, grid2, px1_um, py1_um, px2_um, py2_um):
         self.reference_grid = grid1
         self.adjusted_grid = grid2
 
-        self.metadata["pixel_size_x_mm"] = px1
-        self.metadata["pixel_size_y_mm"] = py1
+        self.ref_pixel_um = QPointF(px1_um, py1_um)
+        self.adj_pixel_um = QPointF(px2_um, py2_um)
 
-        self.reference_grid_smooth = gaussian_filter(grid1, self.sigma)
-        self.adjusted_grid_smooth = gaussian_filter(grid2, self.sigma)
+        # self.reference_grid_smooth = gaussian_filter(grid1, self.sigma)
+        # self.adjusted_grid_smooth = gaussian_filter(grid2, self.sigma)
+        self.reference_grid_smooth = grid1
+        self.adjusted_grid_smooth = grid2
 
         self.valid_mask = ~np.isnan(self.reference_grid_smooth) & ~np.isnan(self.adjusted_grid_smooth)
 
@@ -258,7 +282,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
 
         self.adjusted_grid_corrected = remove_relative_offset(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
 
-        size_x_mm = self.reference_grid.shape[0] * self.metadata['pixel_size_x_mm']
+        size_x_mm = self.reference_grid.shape[1] * self.ref_pixel_um.x() / 1000.0
         self.plot_widget.getPlotItem().getViewBox().setRange(xRange=(0, size_x_mm))
 
         self.progress_bar.setVisible(False)
@@ -438,10 +462,10 @@ class ProfileViewer(QtWidgets.QMainWindow):
         if not self.binary_contact is None:
             x_min, x_max, y_min, y_max = self.get_viewbox_ranges_int(shape = self.binary_contact.shape)
 
-            px = self.metadata['pixel_size_x_mm'] * 1000.0
-            py = self.metadata['pixel_size_y_mm'] * 1000.0
+            px_um = self.ref_pixel_um.x()
+            py_um = self.ref_pixel_um.y()
 
-            pixel_area = px * py
+            pixel_area_um2 = px_um * py_um
 
             fragment = self.binary_contact[y_min:y_max+1, x_min:x_max+1]
             
@@ -449,7 +473,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
 
             white_count = np.count_nonzero(fragment)
 
-            white_area_um2 = pixel_area * white_count
+            white_area_um2 = pixel_area_um2 * white_count
             white_area_mm2 = white_area_um2 * 1e-6
 
             ref = self.reference_grid_smooth[y_min:y_max+1, x_min:x_max+1]
@@ -458,7 +482,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
 
             diff_masked = np.where(fragment, diff, 0)
 
-            volume_um3 = np.abs(np.sum(diff_masked)) * pixel_area
+            volume_um3 = np.abs(np.sum(diff_masked)) * pixel_area_um2
             volume_mm3 = volume_um3 * 1e-9
 
             self.statusBar().showMessage(
@@ -487,75 +511,6 @@ class ProfileViewer(QtWidgets.QMainWindow):
         QtWidgets.QApplication.restoreOverrideCursor()
 
         
-    def load_new_data(self):
-        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Wybierz plik HDF5", "", "HDF5 files (*.h5);;Wszystkie pliki (*)")
-        if fname:
-            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-            self.centralWidget().setEnabled(False)
-            self.open_action.setEnabled(False)
-            self.statusBar().showMessage("Wczytywanie danych...")
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)
-            self.worker = ProfileWorker(fname, self.sigma, self.metadata)
-            self.worker.finished.connect(self.on_worker_finished)
-            self.worker.error.connect(self.on_worker_error)
-            self.worker.start()
-
-    def on_worker_finished(self, result):
-        # Zaktualizuj wszystkie dane na podstawie wyniku z wątku
-        self.centralWidget().setEnabled(True)
-        self.open_action.setEnabled(True)
-        self.progress_bar.setVisible(False)
-        self.statusBar().showMessage("Gotowy")
-
-        self.reference_grid = result["reference_grid"]
-        self.adjusted_grid = result["adjusted_grid"]
-        self.reference_grid_smooth = result["reference_grid_smooth"]
-        self.adjusted_grid_smooth = result["adjusted_grid_smooth"]
-        self.valid_mask = result["valid_mask"]
-        self.adjusted_grid_corrected = result["adjusted_grid_corrected"]
-        if self.checkbox_tilt.isChecked():
-            self.adjusted_grid_corrected = remove_relative_tilt(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
-
-        self.adjusted_grid_corrected = remove_relative_offset(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
-
-        size_x_mm = self.reference_grid.shape[0] * self.metadata['pixel_size_x_mm']
-        self.plot_widget.getPlotItem().getViewBox().setRange(xRange=(0, size_x_mm))
-
-        self.progress_bar.setVisible(False)
-        self.statusBar().showMessage("Gotowy")
-        # Reset ROI i odśwież GUI
-        height, width = self.reference_grid_smooth.shape
-        self.x1, self.y1 = 0, 0
-        self.x2, self.y2 = width - 1, height - 1
-
-        # Tutaj już możesz bezpiecznie!
-        height, width = self.reference_grid_smooth.shape
-        self.x1, self.y1 = 0, 0
-        self.x2, self.y2 = width - 1, height - 1  
-
-        self.redraw_roi()
-        
-        shape = self.update_plot()
-
-        self.resize_image_view(shape)
-
-        vb = self.image_view.getView()
-        vb.setAspectLocked(True)
-
-        vb.setLimits( 
-            yMin=0, yMax=shape[0]-1,
-            xMin=0, xMax=shape[1]-1 
-        )
-        
-        vb.setRange(
-            xRange=(0, shape[1]-1),
-            yRange=(0, shape[0]-1),
-            padding=0
-        )
-
-        QtWidgets.QApplication.restoreOverrideCursor()
-
     def resize_image_view(self, shape):
         # shape = (height, width)
         height, width = shape
@@ -571,12 +526,6 @@ class ProfileViewer(QtWidgets.QMainWindow):
         self.image_view.setFixedSize(w, h)
         self.image_view.update()
         self.updateGeometry()
-
-    def on_worker_error(self, msg):
-        self.progress_bar.setVisible(False)
-        QtWidgets.QApplication.restoreOverrideCursor()
-        self.statusBar().showMessage("Błąd podczas przetwarzania!")
-        QtWidgets.QMessageBox.critical(self, "Błąd", "Błąd podczas przetwarzania danych:\n" + msg)
 
     def update_plot(self):
         # Zaktualizuj widoki obrazów
@@ -661,17 +610,22 @@ class ProfileViewer(QtWidgets.QMainWindow):
         rr, cc = line(self.y1, self.x1, self.y2, self.x2)
         rr = np.clip(rr, 0, self.reference_grid_smooth.shape[0] - 1)
         cc = np.clip(cc, 0, self.reference_grid_smooth.shape[1] - 1)
+        
         profile_ref = self.reference_grid_smooth[rr, cc]
         profile_adj = (self.adjusted_grid_corrected + self.separation)[rr, cc]
         valid_profile_mask = ~np.isnan(profile_ref) & ~np.isnan(profile_adj)
+        
         self.rr = rr[valid_profile_mask]
         self.cc = cc[valid_profile_mask]
         profile_ref = profile_ref[valid_profile_mask]
         profile_adj = profile_adj[valid_profile_mask]
-        positions_line = np.arange(len(rr))[valid_profile_mask] * self.metadata['pixel_size_x_mm']
+        
+        positions_line = np.arange(len(rr))[valid_profile_mask] * self.ref_pixel_um.x() / 1000.0
+        
         self.positions_line = positions_line
         self.reference_profile = profile_ref
         self.adjusted_profile = profile_adj
+        
         self.plot_widget.clear()
         self.plot_widget.plot(positions_line, self.reference_profile, pen=pg.mkPen('g', width=2))
         self.plot_widget.plot(positions_line, self.adjusted_profile, pen=pg.mkPen('b', width=2))
@@ -731,8 +685,8 @@ class ProfileViewer(QtWidgets.QMainWindow):
                     view.addItem(self.image_marker)
                 height_diff = self.reference_profile[idx] - self.adjusted_profile[idx]
                 window_mm = self.spinbox_window_mm.value()
-                pixel_size = self.metadata['pixel_size_x_mm']
-                window_size = max(1, int(round(window_mm / pixel_size)))
+                pixel_size_mm = self.ref_pixel_um.x() / 1000.0
+                window_size = max(1, int(round(window_mm / pixel_size_mm)))
                 start = max(0, idx - window_size)
                 end = min(len(self.positions_line), idx + window_size + 1)
                 # Nachylenie profilu referencyjnego
@@ -799,20 +753,6 @@ class ProfileViewer(QtWidgets.QMainWindow):
                 if self.image_marker is not None:
                     view.removeItem(self.image_marker)
                     self.image_marker = None
-
-    def load_data_from_file(self, fname):
-        self.statusBar().showMessage("Wczytywanie danych...")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)
-        self.worker = ProfileWorker(fname, self.sigma, self.metadata)
-        self.worker.finished.connect(self.on_worker_finished)
-        self.worker.error.connect(self.on_worker_error)
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-        self.centralWidget().setEnabled(False)
-        self.open_action.setEnabled(False)
-        self.worker.start()
-
-
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])

@@ -4,41 +4,9 @@ import pyqtgraph.opengl as gl
 
 
 import numpy as np
-from scipy.interpolate import griddata
 
-def fill_holes(grid):
-    if grid is None:
-        return
 
-    tst = np.isnan(grid)
-    
-    grid_x, grid_y = np.meshgrid(np.arange(grid.shape[1]), np.arange(grid.shape[0]))  # tworzymy siatkę 1x1
-
-    interp_points = np.column_stack((grid_x[tst], grid_y[tst]))
-
-    valid = ~np.isnan(grid)
-    interp_values = griddata(
-        (grid_x[valid], grid_y[valid]),
-        grid[valid],
-        interp_points,
-        method='nearest'  # lub 'linear', jeśli wolisz łagodniejsze przejścia
-    )
-
-    grid[tst] = interp_values
-    return grid
-
-def remove_outliers(original_grid, smoothed_grid, threshold):
-    """
-    Zamienia outliery w original_grid na wartości z siatki wygładzonej,
-    jeśli różnica przekracza próg (threshold).
-    """
-    diff = np.abs(original_grid - smoothed_grid)
-    mask_outlier = diff > threshold
-
-    cleaned = original_grid.copy()
-    # cleaned[mask_outlier] = np.nan
-    cleaned[mask_outlier] = smoothed_grid[mask_outlier]
-    return cleaned
+from helpers import fill_holes, remove_outliers
 
 
 class Simple3DWindow(QtWidgets.QDialog):
@@ -59,14 +27,16 @@ class Simple3DWindow(QtWidgets.QDialog):
 
 
     def update_data(self, grid_original):
-        grid_filled = fill_holes(grid_original)
+        # grid_filled = fill_holes(grid_original)
         
-        from scipy.ndimage import gaussian_filter
-        sigma = 25
-        grid_smooth = gaussian_filter(grid_filled, sigma)
+        # from scipy.ndimage import gaussian_filter
+        # sigma = 25
+        # grid_smooth = gaussian_filter(grid_filled, sigma)
        
-        threshold = 100
-        grid = remove_outliers(grid_original, grid_smooth, threshold)
+        # threshold = 100
+        # grid = remove_outliers(grid_original, grid_smooth, threshold)
+
+        grid = grid_original
 
         self.view.clear()
         #self.surface_ref_item = None
