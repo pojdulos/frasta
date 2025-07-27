@@ -214,53 +214,56 @@ class ScanTab(QtWidgets.QWidget):
         self.grid = -self.grid
         self.update_image()
 
-
-    def repair_grid(self, roi=None):
-        sigma = 25
-        threshold = 100
-
+    def create_repair_dialog(self, sigma=25, threshold=100):
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Select actions")
         layout = QtWidgets.QVBoxLayout(dialog)
         ch_sigma = QtWidgets.QLabel("sigma:")
         ed_sigma = QtWidgets.QSpinBox()
-        ed_sigma.setRange(0,100)
+        ed_sigma.setRange(0, 100)
         ed_sigma.setValue(sigma)
         ch_thresh = QtWidgets.QLabel("threshold:")
         ed_thresh = QtWidgets.QSpinBox()
-        ed_thresh.setRange(0,10000)
+        ed_thresh.setRange(0, 10000)
         ed_thresh.setValue(threshold)
-
         ch_newtab = QtWidgets.QCheckBox("create new tab:")
         lbl_newtab = QtWidgets.QLabel("tab label:")
         ed_label = QtWidgets.QLineEdit("name")
-
         ch_newtab.setDisabled(True)
         ed_label.setDisabled(True)
-
         ok_btn = QtWidgets.QPushButton("OK")
         cancel_btn = QtWidgets.QPushButton("Anuluj")
-
         hl = QtWidgets.QHBoxLayout()
         hl.addWidget(ok_btn)
         hl.addWidget(cancel_btn)
-
         fl = QtWidgets.QFormLayout()
-        fl.addRow(ch_sigma,ed_sigma)
-        fl.addRow(ch_thresh,ed_thresh)
+        fl.addRow(ch_sigma, ed_sigma)
+        fl.addRow(ch_thresh, ed_thresh)
         fl.addWidget(ch_newtab)
-        fl.addRow(lbl_newtab,ed_label)
-
+        fl.addRow(lbl_newtab, ed_label)
         layout.addLayout(fl)
         layout.addLayout(hl)
-
         def accept():
             dialog.accept()
         ok_btn.clicked.connect(accept)
         cancel_btn.clicked.connect(dialog.reject)
+        return dialog, ed_sigma, ed_thresh
 
+
+    def repair_grid(self, roi=None):
+        """Repairs the grid by filling holes, smoothing, and removing outliers, optionally within a region of interest.
+
+        This function displays a dialog for the user to select smoothing and outlier removal parameters, then processes the grid accordingly.
+        The grid is updated in-place and the image view is refreshed.
+
+        Args:
+            roi (optional): A region of interest object. If provided and visible, restricts processing to the ROI area.
+        """
+        dialog, ed_sigma, ed_thresh = self.create_repair_dialog()
         if dialog.exec_() != QtWidgets.QDialog.Accepted:
             return
+        sigma = ed_sigma.value()
+        threshold = ed_thresh.value()
 
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
 
@@ -276,9 +279,6 @@ class ScanTab(QtWidgets.QWidget):
             mask = ((X - cx) ** 2 + (Y - cy) ** 2) <= r**2
         else:
             mask = None  # brak ograniczenia
-
-        sigma = ed_sigma.value()
-        threshold = ed_thresh.value()
 
         grid_filled = fill_holes(self.grid, mask=mask)
         grid_smooth = nan_aware_gaussian(grid_filled, sigma, mask=mask)
@@ -326,6 +326,17 @@ class ScanTab(QtWidgets.QWidget):
         self.update_image()
 
     def get_zero_point_value(self, x, y):
+        """Calculates a robust zero point value from a local window around (x, y).
+
+        This function returns the mean of non-outlier values within a window centered at (x, y), or the median if all values are outliers or missing.
+
+        Args:
+            x (int): The x-coordinate of the window center.
+            y (int): The y-coordinate of the window center.
+
+        Returns:
+            float: The calculated zero point value, or NaN if no valid data is present.
+        """
         s = self.zero_window_size // 2
         grid = self.grid
         h, w = grid.shape
@@ -351,6 +362,22 @@ class ScanTab(QtWidgets.QWidget):
         return np.mean(non_outliers)
 
     def fit_plane_to_grid(self, grid, x, y, s=100):
+        """Fits a plane to a local window of the grid centered at (x, y).
+        
+        This function uses linear regression to fit a plane to the non-NaN values in a square window of size (2*s+1) around the specified point.
+
+        Args:
+            grid (np.ndarray): The 2D array representing the grid data.
+            x (int): The x-coordinate of the window center.
+            y (int): The y-coordinate of the window center.
+            s (int, optional): The half-size of the window. Defaults to 100.
+
+        Returns:
+            tuple: Coefficients (a, b, c) of the fitted plane z = a*x + b*y + c.
+
+        Raises:
+            ValueError: If there are not enough valid data points to fit a plane.
+        """
         h, w = grid.shape
         xmin = max(0, x - s)
         xmax = min(w, x + s + 1)
@@ -384,6 +411,22 @@ class ScanTab(QtWidgets.QWidget):
 
 
     def fit_plane_to_grid_robust(self, grid, x, y, s=100):
+        """Fits a plane to a local window of the grid using a robust regression method.
+
+        This function applies RANSAC regression to fit a plane to the non-NaN values in a square window of size (2*s+1) around the specified point, making it resistant to outliers.
+
+        Args:
+            grid (np.ndarray): The 2D array representing the grid data.
+            x (int): The x-coordinate of the window center.
+            y (int): The y-coordinate of the window center.
+            s (int, optional): The half-size of the window. Defaults to 100.
+
+        Returns:
+            tuple: Coefficients (a, b, c) of the fitted plane z = a*x + b*y + c.
+
+        Raises:
+            ValueError: If there are not enough valid data points to fit a plane.
+        """
         h, w = grid.shape
         xmin = max(0, x - s)
         xmax = min(w, x + s + 1)
@@ -418,6 +461,23 @@ class ScanTab(QtWidgets.QWidget):
         return a, b, c
 
     def fit_plane_to_grid_median_filter(self, grid, x, y, s=100, outlier_thresh=300.0):
+        """Fits a plane to a local window of the grid using a median filter to remove outliers.
+
+        This function fits a plane to the non-NaN values in a square window of size (2*s+1) around the specified point, excluding outliers based on the median absolute deviation.
+
+        Args:
+            grid (np.ndarray): The 2D array representing the grid data.
+            x (int): The x-coordinate of the window center.
+            y (int): The y-coordinate of the window center.
+            s (int, optional): The half-size of the window. Defaults to 100.
+            outlier_thresh (float, optional): The threshold multiplier for outlier removal. Defaults to 300.0.
+
+        Returns:
+            tuple: Coefficients (a, b, c) of the fitted plane z = a*x + b*y + c.
+
+        Raises:
+            ValueError: If there are not enough valid data points to fit a plane.
+        """
         h, w = grid.shape
         xmin = max(0, x - s)
         xmax = min(w, x + s + 1)
@@ -461,6 +521,14 @@ class ScanTab(QtWidgets.QWidget):
 
 
     def mouse_clicked(self, event):
+        """Handles mouse click events on the image view.
+
+        This function updates the grid or seed points based on the current mode and the location of the mouse click.
+        It supports setting a new zero point, applying tilt correction, or adding seed points for hole filling.
+
+        Args:
+            event (QGraphicsSceneMouseEvent): The mouse event containing the click position and modifiers.
+        """
         if self.grid is None:
             return
         vb = self.image_view.getView()
@@ -516,6 +584,14 @@ class ScanTab(QtWidgets.QWidget):
 
 #    @measure_time
     def update_image(self, vmin=None, vmax=None):
+        """Updates the displayed image based on the current grid and value range.
+
+        This function refreshes the image view using the current grid data, applying the selected colormap and masking values outside the specified range.
+
+        Args:
+            vmin (float, optional): The minimum value for display range. If None, uses histogram limits or grid minimum.
+            vmax (float, optional): The maximum value for display range. If None, uses histogram limits or grid maximum.
+        """
         if self.grid is not None:
             
             if vmin is None or vmax is None:

@@ -278,7 +278,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def view3d(self):
         tab = self.current_tab()
         if tab:
-            show_3d_viewer(tab.grid)
+            show_3d_viewer(tab.grid, show_controls=False)
 
 
     def toggle_colormap_current_tab(self):
