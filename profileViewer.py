@@ -11,7 +11,7 @@ import h5py
 from scipy.ndimage import gaussian_filter
 from sklearn.linear_model import LinearRegression
 
-from profile3DWindow import Profile3DWindow
+from grid3DViewer import show_3d_viewer
 from helpers import remove_relative_offset, remove_relative_tilt
 
 def create_image_view():
@@ -375,6 +375,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
         else:
             pg.ViewBox.mouseMoveEvent(self.image_view.getView(), event)
 
+
     def show_3d_view(self):
         viewbox = self.image_view.getView()
         x_range, y_range = viewbox.viewRange()
@@ -382,52 +383,43 @@ class ProfileViewer(QtWidgets.QMainWindow):
         # Zamień zakresy na indeksy obrazka
         x_min, x_max = int(np.floor(x_range[0])), int(np.ceil(x_range[1]))
         y_min, y_max = int(np.floor(y_range[0])), int(np.ceil(y_range[1]))
-        
+
         # Upewnij się, że są w granicach obrazka
         shape = self.reference_grid_smooth.shape
         x_min = max(0, x_min)
-        x_max = min(shape[1]-1, x_max)
+        x_max = min(shape[1] - 1, x_max)
         y_min = max(0, y_min)
-        y_max = min(shape[0]-1, y_max)
+        y_max = min(shape[0] - 1, y_max)
 
-        ref = self.reference_grid_smooth[y_min:y_max+1, x_min:x_max+1]
-        adj = self.adjusted_grid_corrected[y_min:y_max+1, x_min:x_max+1]
+        # Wytnij wycinek z siatek
+        ref = self.reference_grid_smooth[y_min:y_max + 1, x_min:x_max + 1]
+        adj = self.adjusted_grid_corrected[y_min:y_max + 1, x_min:x_max + 1]
 
         print(f"ref0: {self.reference_grid_smooth.shape}, adj0: {self.adjusted_grid_corrected.shape}")
         print(f"x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max: {y_max}")
-
         print('ref min:', np.nanmin(ref), 'ref max:', np.nanmax(ref), 'ref shape:', ref.shape)
         print('ref NaN count:', np.isnan(ref).sum())
-
         print('adj min:', np.nanmin(adj), 'adj max:', np.nanmax(adj), 'adj shape:', adj.shape)
         print('adj NaN count:', np.isnan(adj).sum())
 
-
-        # Wyznacz linię profilu tylko z punktów wewnątrz wycinka!
+        # Wyznacz linię profilu (ograniczoną do wycinka)
         if hasattr(self, 'rr') and hasattr(self, 'cc'):
-            points = np.column_stack((self.cc, self.rr))
-            mask_inside = (
-                (points[:, 0] >= x_min) & (points[:, 0] <= x_max) &
-                (points[:, 1] >= y_min) & (points[:, 1] <= y_max)
-            )
-            # ODEJMIJ x_min, y_min żeby profil był względem wycinka
             line_points = [
                 (int(col - x_min), int(row - y_min))
-                for col, row, inside in zip(self.cc, self.rr, mask_inside) if inside
+                for col, row in zip(self.cc, self.rr)
+                if x_min <= col <= x_max and y_min <= row <= y_max
             ]
             if len(line_points) < 2:
                 line_points = None
         else:
             line_points = None
 
-        if getattr(self, "_win3d", None) is None:
-            self._win3d = Profile3DWindow(ref, adj, line_points=line_points, separation=self.separation)
-        else:
-            self._win3d.hide()
-            self._win3d.update_data(ref, adj, line_points=line_points, separation=self.separation)
-        self._win3d.show()
-        self._win3d.raise_()
-        self._win3d.activateWindow()
+        show_3d_viewer(reference_grid=ref,
+            adjusted_grid=adj,
+            line_points=line_points,
+            separation=self.separation,
+            show_controls=True)
+
 
     def get_viewbox_ranges_int(self, shape=None, overflow=False):
         viewbox = self.image_view.getView()

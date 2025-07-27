@@ -12,6 +12,8 @@ from aboutDialog import AboutDialog
 from scanTab import ScanTab
 from gridData import GridData
 
+from grid3DViewer import show_3d_viewer
+
 class GridWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
     finished = QtCore.pyqtSignal(object, object, object, float, float) # grid, xi, yi, px_x, px_y
@@ -88,6 +90,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.worker = None
         self.thread = None
+
+        self._global_3d_viewer = None
 
         self.tabs.currentChanged.connect(self.move_roi_to_current_tab)
 
@@ -271,19 +275,11 @@ class MainWindow(QtWidgets.QMainWindow):
         dist = np.sqrt((X - center[0]) ** 2 + (Y - center[1]) ** 2)
         return dist <= radius
 
-
     def view3d(self):
         tab = self.current_tab()
         if tab:
-            from simple3DWindow import Simple3DWindow
-            if getattr(self, "_win3d", None) is None:
-                self._win3d = Simple3DWindow(tab.grid)
-            else:
-                #self._win3d.hide()
-                self._win3d.update_data(tab.grid)
-            self._win3d.show()
-            self._win3d.raise_()
-            self._win3d.activateWindow()
+            show_3d_viewer(tab.grid)
+
 
     def toggle_colormap_current_tab(self):
         tab = self.current_tab()
