@@ -35,9 +35,10 @@ class OverlayViewer(QtWidgets.QWidget):
 
         def safe_minmax(arr):
             arr = arr[np.isfinite(arr)]  # odrzuca NaN, +inf, -inf
-            if arr.size == 0:
-                return 0.0, 1.0  # domyślne wartości, jeśli wszystko było złe
-            return np.min(arr), np.max(arr)
+            return (0.0, 1.0) if arr.size == 0 else (np.min(arr), np.max(arr))
+            # if arr.size == 0:
+            #     return 0.0, 1.0  # domyślne wartości, jeśli wszystko było złe
+            # return np.min(arr), np.max(arr)
 
         vmin1_, vmax1_ = safe_minmax(self.scan1)
         vmin2_, vmax2_ = safe_minmax(self.scan2)

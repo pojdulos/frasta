@@ -96,7 +96,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.create_menubar()
         self.create_toolbar()
 
-        self.shared_roi = None  # będzie przechowywać jedną instancję CircleROI
+        self.shared_circle_roi = None  # będzie przechowywać jedną instancję CircleROI
+        self.shared_rectangle_roi = None  # będzie przechowywać jedną instancję RectROI
 
         self.worker = None
         self.thread = None
@@ -107,28 +108,46 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def apply_roi_mask(self, inside):
-        """Applies a circular region-of-interest (ROI) mask to the current scan tab.
+        """Applies the active region-of-interest (ROI) mask to the current scan tab.
 
+        Detects which ROI (circle or rectangle) is visible and applies the corresponding mask. 
         Depending on the 'inside' parameter, either the inside or outside of the ROI is masked out in the current tab.
-        
+
         Args:
             inside (bool): If True, mask the area inside the ROI; if False, mask the area outside the ROI.
         """
         tab = self.current_tab()
-        if tab is None or tab.grid is None or self.shared_roi is None or not self.shared_roi.isVisible():
+        if tab is None or tab.grid is None:
             return
-        pos = self.shared_roi.pos()
-        size = self.shared_roi.size()
-        cx = pos.x() + size[0]/2
-        cy = pos.y() + size[1]/2
-        r = size[0]/2
+
         h, w = tab.grid.shape
-        Y, X = np.ogrid[:h, :w]
-        mask = ((X - cx) ** 2 + (Y - cy) ** 2) <= r**2
-        if inside:
-            tab.set_mask(~mask)
+
+        # Check which ROI is active and visible
+        circle_visible = self.shared_circle_roi is not None and self.shared_circle_roi.isVisible()
+        rect_visible = self.shared_rectangle_roi is not None and self.shared_rectangle_roi.isVisible()
+
+        if circle_visible:
+            pos = self.shared_circle_roi.pos()
+            size = self.shared_circle_roi.size()
+            cx = pos.x() + size[0]/2
+            cy = pos.y() + size[1]/2
+            r = size[0]/2
+            mask = self.create_circle_mask((h, w), (cx, cy), r)
+        elif rect_visible:
+            pos = self.shared_rectangle_roi.pos()
+            size = self.shared_rectangle_roi.size()
+            cx = pos.x() + size[0]/2
+            cy = pos.y() + size[1]/2
+            width = size[0]
+            height = size[1]
+            mask = self.create_rectangle_mask((h, w), (cx, cy), width, height)
         else:
-            tab.set_mask(mask)
+            return  # No ROI visible
+
+        if inside:
+            tab.delete_unmasked(~mask)
+        else:
+            tab.delete_unmasked(mask)
 
     def del_inside_mask(self):
         self.apply_roi_mask(True)
@@ -137,45 +156,87 @@ class MainWindow(QtWidgets.QMainWindow):
         self.apply_roi_mask(False)
 
     def move_roi_to_current_tab(self, idx):
-        """Moves the shared circular ROI to the currently selected tab.
+        """Moves the shared ROI (circle or rectangle) to the currently selected tab.
 
-        Ensures that the ROI is only visible on the active tab and removed from all others.
+        Ensures that only the active ROI is visible on the current tab and removed from all others.
 
         Args:
             idx (int): Index of the newly selected tab.
         """
-        if self.shared_roi is None or not self.shared_roi.isVisible():
-            return
-        # Usuń ROI z poprzedniego image_view
-        for i in range(self.tabs.count()):
-            tab = self.tabs.widget(i)
-            tab.image_view.getView().removeItem(self.shared_roi)
-        # Dodaj do bieżącego
-        tab = self.tabs.widget(idx)
-        tab.image_view.getView().addItem(self.shared_roi)
-        self.shared_roi.show()
+        # Move circle ROI if it exists and is visible
+        if self.shared_circle_roi is not None and self.shared_circle_roi.isVisible():
+            for i in range(self.tabs.count()):
+                tab = self.tabs.widget(i)
+                tab.image_view.getView().removeItem(self.shared_circle_roi)
+            tab = self.tabs.widget(idx)
+            tab.image_view.getView().addItem(self.shared_circle_roi)
+            self.shared_circle_roi.show()
+
+        # Move rectangle ROI if it exists and is visible
+        if self.shared_rectangle_roi is not None and self.shared_rectangle_roi.isVisible():
+            for i in range(self.tabs.count()):
+                tab = self.tabs.widget(i)
+                tab.image_view.getView().removeItem(self.shared_rectangle_roi)
+            tab = self.tabs.widget(idx)
+            tab.image_view.getView().addItem(self.shared_rectangle_roi)
+            self.shared_rectangle_roi.show()
 
     def show_circle_roi(self):
         """Shows or hides the shared circular ROI on the current tab.
 
-        If the ROI is already visible, it will be hidden. Otherwise, it will be created if necessary and shown on the current tab.
+        Ensures only the circular ROI is visible, hiding any rectangle ROI if present.
         """
         tab = self.current_tab()
         if tab is None or tab.grid is None:
             return
-        
-        if self.shared_roi is not None and self.shared_roi.isVisible():
-            self.shared_roi.setVisible(False)
+
+        if self.shared_circle_roi is not None and self.shared_circle_roi.isVisible():
+            self.shared_circle_roi.setVisible(False)
             return
-        
-        if self.shared_roi is None:
+
+        # Hide rectangle ROI if present
+        if self.shared_rectangle_roi is not None and self.shared_rectangle_roi.isVisible():
+            self.shared_rectangle_roi.setVisible(False)
+
+        if self.shared_circle_roi is None:
             import pyqtgraph as pg
             h, w = tab.grid.shape
-            self.shared_roi = pg.CircleROI([w//2-50, h//2-50], [100, 100], pen=pg.mkPen('g', width=2))
-            self.shared_roi.setZValue(100)
-            # Dodaj slot do wykrywania zmian, jeśli chcesz
-        tab.image_view.getView().addItem(self.shared_roi)
-        self.shared_roi.show()
+            self.shared_circle_roi = pg.CircleROI([w//2-50, h//2-50], [100, 100], pen=pg.mkPen('g', width=2))
+            self.shared_circle_roi.setZValue(100)
+
+        if self.shared_circle_roi not in tab.image_view.getView().allChildren():
+            tab.image_view.getView().addItem(self.shared_circle_roi)
+        self.shared_circle_roi.show()
+
+    def show_rectangle_roi(self):
+        """Shows or hides the shared rectangle ROI on the current tab.
+
+        Ensures only the rectangle ROI is visible, hiding any circular ROI if present.
+        """
+        tab = self.current_tab()
+        if tab is None or tab.grid is None:
+            return
+
+        # Hide rectangle ROI if already visible, then return
+        if self.shared_rectangle_roi is not None and self.shared_rectangle_roi.isVisible():
+            self.shared_rectangle_roi.setVisible(False)
+            return
+
+        # Hide circle ROI if present and visible
+        if self.shared_circle_roi is not None and self.shared_circle_roi.isVisible():
+            self.shared_circle_roi.setVisible(False)
+
+        # Create rectangle ROI if it does not exist
+        if self.shared_rectangle_roi is None:
+            import pyqtgraph as pg
+            h, w = tab.grid.shape
+            self.shared_rectangle_roi = pg.RectROI([w//2-50, h//2-50], [100, 100], pen=pg.mkPen('g', width=2))
+            self.shared_rectangle_roi.setZValue(100)
+
+        # Add rectangle ROI to the current tab if not already present
+        if self.shared_rectangle_roi not in tab.image_view.getView().allChildren():
+            tab.image_view.getView().addItem(self.shared_rectangle_roi)
+        self.shared_rectangle_roi.show()
 
     def close_tab(self, index):
         widget = self.tabs.widget(index)
@@ -204,7 +265,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # create_actions
         self.actions["del_outside"] = QtWidgets.QAction("outside of the mask", self)
         self.actions["del_inside"] = QtWidgets.QAction("inside of the mask", self)
-        self.actions["show_mask"] = QtWidgets.QAction("Show/hide the mask", self)
+        self.actions["show_mask"] = QtWidgets.QAction("Show/hide the circle mask", self)
+        self.actions["show_rmask"] = QtWidgets.QAction("Show/hide the rectangle mask", self)
 
 
 
@@ -243,6 +305,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["del_outside"].triggered.connect(self.del_outside_mask)
         self.actions["del_inside"].triggered.connect(self.del_inside_mask)
         self.actions["show_mask"].triggered.connect(self.show_circle_roi)
+        self.actions["show_rmask"].triggered.connect(self.show_rectangle_roi)
 
     def create_menubar(self):
         menubar = self.menuBar()
@@ -257,7 +320,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "exit"
             ]),
             ("&Edit", [
-                "show_mask",
+                "show_mask","show_rmask",
                 ("delete", [
                     "del_outside",
                     "del_inside"
@@ -318,9 +381,42 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addAction(self.actions["exit"])
 
     def create_circle_mask(self, shape, center, radius):
+        """Creates a boolean mask for a circle within a 2D array.
+
+        Generates a mask where points inside the specified circle are True and others are False.
+
+        Args:
+            shape (tuple): Shape of the output mask (height, width).
+            center (tuple): (x, y) coordinates of the circle center.
+            radius (float): Radius of the circle.
+
+        Returns:
+            np.ndarray: Boolean mask with True inside the circle.
+        """
         Y, X = np.ogrid[:shape[0], :shape[1]]
         dist = np.sqrt((X - center[0]) ** 2 + (Y - center[1]) ** 2)
         return dist <= radius
+
+
+    def create_rectangle_mask(self, shape, center, width, height):
+        """
+        Creates a boolean mask for a rectangle within a 2D array.
+
+        Args:
+            shape (tuple): Shape of the output mask (height, width).
+            center (tuple): (x, y) coordinates of the rectangle center.
+            width (float): Width of the rectangle.
+            height (float): Height of the rectangle.
+
+        Returns:
+            np.ndarray: Boolean mask with True inside the rectangle.
+        """
+        Y, X = np.ogrid[:shape[0], :shape[1]]
+        x0 = center[0] - width / 2
+        x1 = center[0] + width / 2
+        y0 = center[1] - height / 2
+        y1 = center[1] + height / 2
+        return (X >= x0) & (X < x1) & (Y >= y0) & (Y < y1)
 
     def view3d(self):
         if tab := self.current_tab():
@@ -334,8 +430,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def repair_grid(self):
         if tab := self.current_tab():
-            if self.shared_roi and self.shared_roi.isVisible():
-                tab.repair_grid(roi=self.shared_roi)
+            if self.shared_circle_roi and self.shared_circle_roi.isVisible():
+                tab.repair_grid(roi=self.shared_circle_roi)
+            elif self.shared_rectangle_roi and self.shared_rectangle_roi.isVisible():
+                tab.repair_grid(roi=self.shared_rectangle_roi)
             else:
                 tab.repair_grid(roi=None)
 

@@ -100,7 +100,7 @@ class ScanTab(QtWidgets.QWidget):
         self.tilt_mode = True
         # QtWidgets.QMessageBox.information(self, "Wybierz punkt", "Kliknij na widoku skanu punkt, który ma być nowym zerem.")
 
-    def set_mask(self, mask, inside=True):
+    def delete_unmasked(self, mask):
         if self.grid is not None:
             self.grid = np.where(mask, self.grid, np.nan)
             self.update_image()
@@ -132,20 +132,11 @@ class ScanTab(QtWidgets.QWidget):
         self.hist_min_line.setValue(data.vmin)
         self.hist_max_line.setValue(data.vmax)
 
-    
-    # def get_data(self):
-    #     return {
-    #         'grid': self.grid,
-    #         'xi': self.xi,
-    #         'yi': self.yi,
-    #         'px_x': self.px_x,
-    #         'px_y': self.px_y
-    #     }
 
 
     def set_data(self, grid, xi, yi, px_x, px_y):
         self.grid = grid
-        self.masked = grid
+        self.masked = grid.copy()
         self.xi = xi
         self.yi = yi
         self.px_x = px_x
@@ -298,9 +289,16 @@ class ScanTab(QtWidgets.QWidget):
             return
 
         tst = np.isnan(self.grid)
+        if not np.any(tst):
+            return
+        
         for (iy, ix) in self.seed_points:
-            filled = flood(tst, seed_point=(iy, ix))
-            tst[filled] = False
+            if tst[iy, ix]:
+                filled = flood(tst, seed_point=(iy, ix))
+                tst[filled] = False
+
+        if not np.any(tst):
+            return
 
         print("grid.shape:", self.grid.shape)
         print("xi len:", len(self.xi))
@@ -357,9 +355,10 @@ class ScanTab(QtWidgets.QWidget):
         non_outliers = vals[np.abs(vals - median) < self.zero_sigma * std]
 
         # Jeżeli po odrzuceniu nie ma wartości – bierz medianę
-        if len(non_outliers) == 0:
-            return median
-        return np.mean(non_outliers)
+        return median if len(non_outliers) == 0 else np.mean(non_outliers)
+        # if len(non_outliers) == 0:
+        #     return median
+        # return np.mean(non_outliers)
 
     def fit_plane_to_grid(self, grid, x, y, s=100):
         """Fits a plane to a local window of the grid centered at (x, y).
@@ -502,8 +501,20 @@ class ScanTab(QtWidgets.QWidget):
         # Usuwanie wartości odstających na podstawie mediany
         z_median = np.median(Z)
         mad = np.median(np.abs(Z - z_median))  # Median Absolute Deviation
-        # Pozostaw tylko te punkty, które nie są bardzo daleko od mediany
-        robust_mask = np.abs(Z - z_median) < outlier_thresh * mad
+
+        epsilon = 1e-8
+        if mad < epsilon:
+            # MAD is too small, fallback to std-based outlier detection or treat all as inliers
+            std = np.std(Z)
+            if std < epsilon:
+                # Data is nearly constant, treat all as inliers
+                robust_mask = np.ones_like(Z, dtype=bool)
+            else:
+                # Use standard deviation for outlier detection
+                robust_mask = np.abs(Z - z_median) < 3 * std
+        else:
+            robust_mask = np.abs(Z - z_median) < outlier_thresh * mad
+        
         X = X[robust_mask]
         Y = Y[robust_mask]
         Z = Z[robust_mask]

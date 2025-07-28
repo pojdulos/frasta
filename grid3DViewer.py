@@ -50,6 +50,10 @@ class Grid3DViewer(QtWidgets.QWidget):
         self.checkbox_plane.stateChanged.connect(self.toggle_cross_plane)
 
     def remove_existing_items(self):
+        """Removes all existing items from the 3D view.
+
+        Clears reference and adjusted surfaces, profile lines, and cross-section planes from the viewer.
+        """
         for item in [self.surface_ref_item, self.surface_adj_item,
                      self.ref_profile_line_item, self.adj_profile_line_item,
                      self.cross_plane_item]:
@@ -366,6 +370,17 @@ class Grid3DViewer(QtWidgets.QWidget):
 _global_3d_viewer = None
 
 def show_3d_viewer(reference_grid, adjusted_grid=None, line_points=None, separation=0, show_controls=True):
+    """Displays a 3D viewer window for visualizing reference and adjusted grids.
+
+    Opens or updates a global 3D viewer with the provided grid data, profile lines, and display options.
+
+    Args:
+        reference_grid (np.ndarray): The reference grid data to display.
+        adjusted_grid (np.ndarray, optional): The adjusted grid data to display.
+        line_points (list or np.ndarray, optional): Points for the profile line.
+        separation (float, optional): Vertical separation between surfaces.
+        show_controls (bool, optional): Whether to show control checkboxes in the viewer.
+    """
     global _global_3d_viewer
     if _global_3d_viewer is None:
         _global_3d_viewer = Grid3DViewer(
