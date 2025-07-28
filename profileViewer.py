@@ -208,58 +208,22 @@ class ProfileViewer(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.critical(self, "Błąd", "Błąd podczas przetwarzania danych:\n" + msg)
 
     def on_worker_finished(self, result):
-        # Zaktualizuj wszystkie dane na podstawie wyniku z wątku
         self.centralWidget().setEnabled(True)
         self.open_action.setEnabled(True)
         self.progress_bar.setVisible(False)
         self.statusBar().showMessage("Gotowy")
 
-        self.reference_grid = result["reference_grid"]
-        self.adjusted_grid = result["adjusted_grid"]
-        self.reference_grid_smooth = result["reference_grid_smooth"]
-        self.adjusted_grid_smooth = result["adjusted_grid_smooth"]
-        self.valid_mask = result["valid_mask"]
-        self.adjusted_grid_corrected = result["adjusted_grid_corrected"]
-        if self.checkbox_tilt.isChecked():
-            self.adjusted_grid_corrected = remove_relative_tilt(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
-
-        self.adjusted_grid_corrected = remove_relative_offset(self.reference_grid_smooth, self.adjusted_grid_corrected, self.valid_mask)
-
-        size_x_mm = self.reference_grid.shape[1] * self.ref_pixel_um.x() / 1000.0 # konwertuję do mm
-        
-        self.plot_widget.getPlotItem().getViewBox().setRange(xRange=(0, size_x_mm))
-
-        self.progress_bar.setVisible(False)
-        self.statusBar().showMessage("Gotowy")
-
-        # Reset ROI i odśwież GUI
-        height, width = self.reference_grid_smooth.shape
-        self.x1, self.y1 = 0, 0
-        self.x2, self.y2 = width - 1, height - 1
-
-        self.redraw_roi()
-        
-        shape = self.update_plot()
-
-        self.resize_image_view(shape)
-
-        vb = self.image_view.getView()
-        vb.setAspectLocked(True)
-
-        vb.setLimits( 
-            yMin=0, yMax=shape[0]-1,
-            xMin=0, xMax=shape[1]-1 
-        )
-        
-        vb.setRange(
-            xRange=(0, shape[1]-1),
-            yRange=(0, shape[0]-1),
-            padding=0
+        # Użyj set_data do ustawienia siatek i odświeżenia GUI
+        self.set_data(
+            result["reference_grid"],
+            result["adjusted_grid"],
+            self.ref_pixel_um.x(),
+            self.ref_pixel_um.y(),
+            self.adj_pixel_um.x(),
+            self.adj_pixel_um.y()
         )
 
         QtWidgets.QApplication.restoreOverrideCursor()
-
-
 
     def set_data(self, grid1, grid2, px1_um, py1_um, px2_um, py2_um):
         self.reference_grid = grid1
@@ -440,7 +404,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
             x_min, x_max = int(np.ceil(x_range[0])), int(np.floor(x_range[1]))-1
             y_min, y_max = int(np.ceil(y_range[0])), int(np.floor(y_range[1]))-1
 
-        if not shape is None:
+        if shape is not None:
             x_min = max(0, x_min)
             x_max = min(shape[1]-1, x_max)
             y_min = max(0, y_min)
@@ -628,127 +592,166 @@ class ProfileViewer(QtWidgets.QMainWindow):
 
     def on_plot_click(self, event):
         if event.modifiers() == QtCore.Qt.ControlModifier:
-            pos = event.scenePos()
-            if self.plot_widget.sceneBoundingRect().contains(pos):
-                mouse_point = self.plot_widget.plotItem.vb.mapSceneToView(pos)
-                x_pos = mouse_point.x()
-                if self.positions_line[0] <= x_pos <= self.positions_line[-1]:
-                    idx = np.argmin(np.abs(self.positions_line - x_pos))
-                    if hasattr(self, 'rr') and hasattr(self, 'cc'):
-                        y_img = self.rr[idx]
-                        x_img = self.cc[idx]
-                        ref_val = self.reference_profile[idx]
-                        adj_val = self.adjusted_profile[idx]
-                        pos_mm = self.positions_line[idx]
-                        self.saved_points.append({
-                            'profile_idx': idx,
-                            'x_img': int(x_img),
-                            'y_img': int(y_img),
-                            'x_pos_mm': float(pos_mm),
-                            'ref_val': float(ref_val),
-                            'adj_val': float(adj_val),
-                        })
-                        marker = pg.ScatterPlotItem([x_img], [y_img], size=12, pen=pg.mkPen('g', width=2), brush=pg.mkBrush(0, 255, 255, 120), symbol='+')
-                        self.image_view.getView().addItem(marker)
-                        self.saved_point_markers.append(marker)
-                        print("Saved point:", self.saved_points[-1])
+            self._handle_ctrl_click(event)
+
+    def _handle_ctrl_click(self, event):
+        pos = event.scenePos()
+        if not self.plot_widget.sceneBoundingRect().contains(pos):
+            return
+        mouse_point = self.plot_widget.plotItem.vb.mapSceneToView(pos)
+        x_pos = mouse_point.x()
+        if not (self.positions_line[0] <= x_pos <= self.positions_line[-1]):
+            return
+        idx = np.argmin(np.abs(self.positions_line - x_pos))
+        if hasattr(self, 'rr') and hasattr(self, 'cc'):
+            self._save_profile_point(idx)
+
+    def _save_profile_point(self, idx):
+        y_img = self.rr[idx]
+        x_img = self.cc[idx]
+        ref_val = self.reference_profile[idx]
+        adj_val = self.adjusted_profile[idx]
+        pos_mm = self.positions_line[idx]
+        self.saved_points.append({
+            'profile_idx': idx,
+            'x_img': int(x_img),
+            'y_img': int(y_img),
+            'x_pos_mm': float(pos_mm),
+            'ref_val': float(ref_val),
+            'adj_val': float(adj_val),
+        })
+        marker = pg.ScatterPlotItem([x_img], [y_img], size=12, pen=pg.mkPen('g', width=2), brush=pg.mkBrush(0, 255, 255, 120), symbol='+')
+        self.image_view.getView().addItem(marker)
+        self.saved_point_markers.append(marker)
+        print("Saved point:", self.saved_points[-1])
+
 
     def on_mouse_move(self, pos):
-        if self.plot_widget.sceneBoundingRect().contains(pos):
-            mouse_point = self.plot_widget.plotItem.vb.mapSceneToView(pos)
-            x_pos = mouse_point.x()
-            for item in self.cursor_lines + self.annotations:
-                self.plot_widget.removeItem(item)
-            self.cursor_lines.clear()
-            self.annotations.clear()
-            vline = pg.InfiniteLine(pos=x_pos, angle=90, pen=pg.mkPen('r', width=1, style=QtCore.Qt.DashLine))
-            self.plot_widget.addItem(vline)
-            self.cursor_lines.append(vline)
-            positions_line = self.positions_line
-            if positions_line[0] <= x_pos <= positions_line[-1]:
-                idx = np.argmin(np.abs(positions_line - x_pos))
-                if hasattr(self, 'rr') and hasattr(self, 'cc'):
-                    y_img = self.rr[idx]
-                    x_img = self.cc[idx]
-                    view = self.image_view.getView()
-                    if self.image_marker is not None:
-                        view.removeItem(self.image_marker)
-                    self.image_marker = pg.ScatterPlotItem([x_img], [y_img], size=14, pen=pg.mkPen('m', width=2), brush=pg.mkBrush(255, 0, 255, 100))
-                    view.addItem(self.image_marker)
-                height_diff = self.reference_profile[idx] - self.adjusted_profile[idx]
-                window_mm = self.spinbox_window_mm.value()
-                pixel_size_mm = self.ref_pixel_um.x() / 1000.0
-                window_size = max(1, int(round(window_mm / pixel_size_mm)))
-                start = max(0, idx - window_size)
-                end = min(len(self.positions_line), idx + window_size + 1)
-                # Nachylenie profilu referencyjnego
-                x_fit_ref = self.positions_line[start:end].reshape(-1, 1)
-                y_fit_ref = self.reference_profile[start:end].reshape(-1, 1) / 1000.0
-                reg_ref = LinearRegression().fit(x_fit_ref, y_fit_ref)
-                slope_ref = reg_ref.coef_[0][0]
-                angle_ref = degrees(atan(slope_ref))
-                # Nachylenie profilu dopasowanego
-                y_fit_adj = self.adjusted_profile[start:end].reshape(-1, 1) / 1000.0
-                reg_adj = LinearRegression().fit(x_fit_ref, y_fit_adj)
-                slope_adj = reg_adj.coef_[0][0]
-                angle_adj = degrees(atan(slope_adj))
-                delta_angle = angle_ref - angle_adj
-                text1 = pg.TextItem(f"DIFF: {height_diff:.2f} μm", color='r', anchor=(0, 1))
-                vb = self.plot_widget.getPlotItem().vb
-                x_min, x_max = vb.viewRange()[0]
-                y_min, y_max = vb.viewRange()[1]
-                text1.setPos(x_min + 0.02 * (x_max - x_min), y_max - 0.05 * (y_max - y_min))
-                self.plot_widget.addItem(text1)
-                self.annotations.append(text1)
-                text2 = pg.TextItem(f"ANGLE\nref: {angle_ref:.1f}°\nadj: {angle_adj:.1f}°\n  Δ: {delta_angle:.1f}°", color='y', anchor=(0, 1))
-                text2.setPos(x_min + 0.02 * (x_max - x_min), y_max - 0.2 * (y_max - y_min))
-                self.plot_widget.addItem(text2)
-                self.annotations.append(text2)
-                line_half_width_mm = window_mm / 2.0
-                x0 = x_pos - line_half_width_mm
-                x1 = x_pos + line_half_width_mm
-                
-                a = slope_ref
-                if self.checkbox_snap.isChecked():
-                    y_at_cursor = self.reference_profile[idx] / 1000.0
-                    b = y_at_cursor - a * x_pos
-                else:
-                    b = reg_ref.intercept_[0]
-                y0 = a * x0 + b
-                y1 = a * x1 + b
-                for item in self.mytest:
-                    vb.removeItem(item)
-                self.mytest.clear()
-                line_ref = pg.PlotDataItem([x0, x1], [y0 * 1000, y1 * 1000], pen=pg.mkPen('y', width=2))
-                vb.addItem(line_ref, ignoreBounds=True)
-                self.annotations.append(line_ref)
-                self.mytest.append(line_ref)
-                
-                a = slope_adj
-                if self.checkbox_snap.isChecked():
-                    y_at_cursor_adj = self.adjusted_profile[idx] / 1000.0
-                    b_adj = y_at_cursor_adj - a * x_pos
-                else:
-                    b_adj = reg_adj.intercept_[0]
-                y0 = a * x0 + b_adj
-                y1 = a * x1 + b_adj
-                line_adj = pg.PlotDataItem([x0, x1], [y0 * 1000, y1 * 1000], pen=pg.mkPen('y', width=2))
-                vb.addItem(line_adj, ignoreBounds=True)
-                self.annotations.append(line_adj)
-                self.mytest.append(line_adj)
-            else:
-                vb = self.plot_widget.getPlotItem().vb
-                for item in self.mytest:
-                    vb.removeItem(item)
-                self.mytest.clear()
-                view = self.image_view.getView()
-                if self.image_marker is not None:
-                    view.removeItem(self.image_marker)
-                    self.image_marker = None
+        if not self.plot_widget.sceneBoundingRect().contains(pos):
+            return
+        mouse_point = self.plot_widget.plotItem.vb.mapSceneToView(pos)
+        x_pos = mouse_point.x()
+        self._clear_cursor_and_annotations()
+        self._draw_cursor_line(x_pos)
+        positions_line = self.positions_line
+        if positions_line[0] <= x_pos <= positions_line[-1]:
+            idx = np.argmin(np.abs(positions_line - x_pos))
+            self._update_image_marker(idx)
+            self._draw_annotations_and_fit_lines(x_pos, idx)
+        else:
+            self._clear_fit_lines_and_marker()
+
+    def _clear_cursor_and_annotations(self):
+        for item in self.cursor_lines + self.annotations:
+            self.plot_widget.removeItem(item)
+        self.cursor_lines.clear()
+        self.annotations.clear()
+
+    def _draw_cursor_line(self, x_pos):
+        vline = pg.InfiniteLine(pos=x_pos, angle=90, pen=pg.mkPen('r', width=1, style=QtCore.Qt.DashLine))
+        self.plot_widget.addItem(vline)
+        self.cursor_lines.append(vline)
+
+    def _update_image_marker(self, idx):
+        if hasattr(self, 'rr') and hasattr(self, 'cc'):
+            y_img = self.rr[idx]
+            x_img = self.cc[idx]
+            view = self.image_view.getView()
+            if self.image_marker is not None:
+                view.removeItem(self.image_marker)
+            self.image_marker = pg.ScatterPlotItem([x_img], [y_img], size=14, pen=pg.mkPen('m', width=2), brush=pg.mkBrush(255, 0, 255, 100))
+            view.addItem(self.image_marker)
+
+    def _draw_annotations_and_fit_lines(self, x_pos, idx):
+        height_diff = self.reference_profile[idx] - self.adjusted_profile[idx]
+        window_mm = self.spinbox_window_mm.value()
+        pixel_size_mm = self.ref_pixel_um.x() / 1000.0
+        window_size = max(1, int(round(window_mm / pixel_size_mm)))
+        start = max(0, idx - window_size)
+        end = min(len(self.positions_line), idx + window_size + 1)
+
+        # Fit lines and angles
+        slope_ref, angle_ref, reg_ref = self._fit_profile(self.positions_line[start:end], self.reference_profile[start:end])
+        slope_adj, angle_adj, reg_adj = self._fit_profile(self.positions_line[start:end], self.adjusted_profile[start:end])
+        delta_angle = angle_ref - angle_adj
+
+        # Draw text annotations
+        self._draw_diff_and_angle_text(height_diff, angle_ref, angle_adj, delta_angle)
+
+        # Draw fit lines
+        self._draw_fit_lines(x_pos, slope_ref, reg_ref, slope_adj, reg_adj, idx, window_mm)
+
+    def _fit_profile(self, x, y):
+        x_fit = x.reshape(-1, 1)
+        y_fit = y.reshape(-1, 1) / 1000.0
+        reg = LinearRegression().fit(x_fit, y_fit)
+        slope = reg.coef_[0][0]
+        angle = degrees(atan(slope))
+        return slope, angle, reg
+
+    def _draw_diff_and_angle_text(self, height_diff, angle_ref, angle_adj, delta_angle):
+        text1 = pg.TextItem(f"DIFF: {height_diff:.2f} μm", color='r', anchor=(0, 1))
+        vb = self.plot_widget.getPlotItem().vb
+        x_min, x_max = vb.viewRange()[0]
+        y_min, y_max = vb.viewRange()[1]
+        text1.setPos(x_min + 0.02 * (x_max - x_min), y_max - 0.05 * (y_max - y_min))
+        self.plot_widget.addItem(text1)
+        self.annotations.append(text1)
+        text2 = pg.TextItem(f"ANGLE\nref: {angle_ref:.1f}°\nadj: {angle_adj:.1f}°\n  Δ: {delta_angle:.1f}°", color='y', anchor=(0, 1))
+        text2.setPos(x_min + 0.02 * (x_max - x_min), y_max - 0.2 * (y_max - y_min))
+        self.plot_widget.addItem(text2)
+        self.annotations.append(text2)
+
+    def _draw_fit_lines(self, x_pos, slope_ref, reg_ref, slope_adj, reg_adj, idx, window_mm):
+        vb = self.plot_widget.getPlotItem().vb
+        line_half_width_mm = window_mm / 2.0
+        x0 = x_pos - line_half_width_mm
+        x1 = x_pos + line_half_width_mm
+
+        # Reference fit line
+        a = slope_ref
+        if self.checkbox_snap.isChecked():
+            y_at_cursor = self.reference_profile[idx] / 1000.0
+            b = y_at_cursor - a * x_pos
+        else:
+            b = reg_ref.intercept_[0]
+        y0 = a * x0 + b
+        y1 = a * x1 + b
+        for item in self.mytest:
+            vb.removeItem(item)
+        self.mytest.clear()
+        line_ref = pg.PlotDataItem([x0, x1], [y0 * 1000, y1 * 1000], pen=pg.mkPen('y', width=2))
+        vb.addItem(line_ref, ignoreBounds=True)
+        self.annotations.append(line_ref)
+        self.mytest.append(line_ref)
+
+        # Adjusted fit line
+        a = slope_adj
+        if self.checkbox_snap.isChecked():
+            y_at_cursor_adj = self.adjusted_profile[idx] / 1000.0
+            b_adj = y_at_cursor_adj - a * x_pos
+        else:
+            b_adj = reg_adj.intercept_[0]
+        y0 = a * x0 + b_adj
+        y1 = a * x1 + b_adj
+        line_adj = pg.PlotDataItem([x0, x1], [y0 * 1000, y1 * 1000], pen=pg.mkPen('y', width=2))
+        vb.addItem(line_adj, ignoreBounds=True)
+        self.annotations.append(line_adj)
+        self.mytest.append(line_adj)
+
+    def _clear_fit_lines_and_marker(self):
+        vb = self.plot_widget.getPlotItem().vb
+        for item in self.mytest:
+            vb.removeItem(item)
+        self.mytest.clear()
+        view = self.image_view.getView()
+        if self.image_marker is not None:
+            view.removeItem(self.image_marker)
+            self.image_marker = None
+
+
+
 
 if __name__ == '__main__':
-    app = QtWidgets.QApplication([])
-    viewer = ProfileViewer()
-    viewer.load_data_from_file("source_data/moj_test_aligned.h5")
-    viewer.show()
-    sys.exit(app.exec_())
+    from frasta_gui import run
+    run()

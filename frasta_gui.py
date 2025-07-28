@@ -66,7 +66,17 @@ class GridWorker(QtCore.QObject):
         self.finished.emit(grid, xi_grid, yi_grid, px_x, px_y) #, x, y, z)
 
 class MainWindow(QtWidgets.QMainWindow):
+    """Main application window for the scan loader and hole filler tool.
+
+    Provides a multi-tab interface for loading, viewing, processing, and saving 2D scan data. 
+    Supports region-of-interest masking, 3D visualization, scan comparison, and profile analysis.
+    """
+
     def __init__(self):
+        """Initializes the main window and sets up the user interface.
+
+        Sets up the tab widget, recent files, actions, menus, toolbar, and shared ROI for scan management.
+        """
         super().__init__()
         self.setWindowTitle("Scan Loader & Hole Filler (Multi-Tab)")
         self.setGeometry(100, 100, 1000, 600)
@@ -95,7 +105,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.tabs.currentChanged.connect(self.move_roi_to_current_tab)
 
+
     def apply_roi_mask(self, inside):
+        """Applies a circular region-of-interest (ROI) mask to the current scan tab.
+
+        Depending on the 'inside' parameter, either the inside or outside of the ROI is masked out in the current tab.
+        
+        Args:
+            inside (bool): If True, mask the area inside the ROI; if False, mask the area outside the ROI.
+        """
         tab = self.current_tab()
         if tab is None or tab.grid is None or self.shared_roi is None or not self.shared_roi.isVisible():
             return
@@ -119,6 +137,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.apply_roi_mask(False)
 
     def move_roi_to_current_tab(self, idx):
+        """Moves the shared circular ROI to the currently selected tab.
+
+        Ensures that the ROI is only visible on the active tab and removed from all others.
+
+        Args:
+            idx (int): Index of the newly selected tab.
+        """
         if self.shared_roi is None or not self.shared_roi.isVisible():
             return
         # Usuń ROI z poprzedniego image_view
@@ -131,11 +156,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.shared_roi.show()
 
     def show_circle_roi(self):
+        """Shows or hides the shared circular ROI on the current tab.
+
+        If the ROI is already visible, it will be hidden. Otherwise, it will be created if necessary and shown on the current tab.
+        """
         tab = self.current_tab()
         if tab is None or tab.grid is None:
             return
         
-        if not self.shared_roi is None and self.shared_roi.isVisible():
+        if self.shared_roi is not None and self.shared_roi.isVisible():
             self.shared_roi.setVisible(False)
             return
         
@@ -217,39 +246,57 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def create_menubar(self):
         menubar = self.menuBar()
-        file_menu = menubar.addMenu("&File")
-        file_menu.addAction(self.actions["open"])
-        file_menu.addAction(self.actions["save_scan"])
-        file_menu.addAction(self.actions["save_multi"])
 
+        menu_structure = [
+            ("&File", [
+                "open",
+                "save_scan",
+                "save_multi",
+                ("recent_menu", []),
+                "separator",
+                "exit"
+            ]),
+            ("&Edit", [
+                "show_mask",
+                ("delete", [
+                    "del_outside",
+                    "del_inside"
+                ])
+            ]),
+            ("Scan &Actions", [
+                "fill", "repair", "flip", "zero", "colormap"
+            ]),
+            ("&Tools", [
+                "compare", "profile"
+            ]),
+            ("&Help", [
+                "about"
+            ])
+        ]
+
+        # Tworzymy recent_menu przed budowaniem menu
         self.recent_menu = QtWidgets.QMenu("Recent files", self)
-        file_menu.addMenu(self.recent_menu)
         self.update_recent_files_menu()
 
-        file_menu.addSeparator()
-        file_menu.addAction(self.actions["exit"])
+        def add_menu_items(menu, items):
+            for item in items:
+                if item == "separator":
+                    menu.addSeparator()
+                elif isinstance(item, tuple):
+                    submenu_name, subitems = item
+                    if submenu_name == "recent_menu":
+                        menu.addMenu(self.recent_menu)
+                    else:
+                        submenu = QtWidgets.QMenu(submenu_name, self)
+                        add_menu_items(submenu, subitems)
+                        menu.addMenu(submenu)
+                else:
+                    menu.addAction(self.actions[item])
 
-        edit_menu = menubar.addMenu("&Edit")        
-        edit_menu.addAction(self.actions["show_mask"])
-        delete_menu = QtWidgets.QMenu("delete", self)
-        delete_menu.addAction(self.actions["del_outside"])
-        delete_menu.addAction(self.actions["del_inside"])
-        edit_menu.addMenu(delete_menu)
+        for menu_name, items in menu_structure:
+            menu = menubar.addMenu(menu_name)
+            add_menu_items(menu, items)
 
-
-        actions_menu = menubar.addMenu("Scan &Actions")
-        actions_menu.addAction(self.actions["fill"])
-        actions_menu.addAction(self.actions["repair"])
-        actions_menu.addAction(self.actions["flip"])
-        actions_menu.addAction(self.actions["zero"])
-        actions_menu.addAction(self.actions["colormap"])
-
-        tools_menu = menubar.addMenu("&Tools")
-        tools_menu.addAction(self.actions["compare"])
-        tools_menu.addAction(self.actions["profile"])
-
-        help_menu = menubar.addMenu("&Help")
-        help_menu.addAction(self.actions["about"])
 
     def create_toolbar(self):
         self.toolbar = self.addToolBar("Tools")
@@ -276,33 +323,28 @@ class MainWindow(QtWidgets.QMainWindow):
         return dist <= radius
 
     def view3d(self):
-        tab = self.current_tab()
-        if tab:
+        if tab := self.current_tab():
             show_3d_viewer(tab.grid, show_controls=False)
 
 
     def toggle_colormap_current_tab(self):
-        tab = self.current_tab()
-        if tab:
+        if tab := self.current_tab():
             tab.toggle_colormap()
 
 
     def repair_grid(self):
-        tab = self.current_tab()
-        if tab:
-            if self.shared_roi and self.shared_roi.isVisible:
+        if tab := self.current_tab():
+            if self.shared_roi and self.shared_roi.isVisible():
                 tab.repair_grid(roi=self.shared_roi)
             else:
                 tab.repair_grid(roi=None)
 
     def set_zero_point_mode(self):
-        tab = self.current_tab()
-        if tab:
+        if tab := self.current_tab():
             tab.set_zero_point_mode()
 
     def set_tilt_mode(self):
-        tab = self.current_tab()
-        if tab:
+        if tab := self.current_tab():
             tab.set_tilt_mode()
 
     def show_about_dialog(self):
@@ -339,8 +381,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.recent_menu.addAction(action)
 
     def current_tab(self):
-        tab = self.tabs.currentWidget()
-        return tab
+        return self.tabs.currentWidget()
 
     def load_csv(self, fname, tab):
         dlg = QtWidgets.QProgressDialog("Wczytywanie i gridowanie...", None, 0, 100, self)
@@ -372,7 +413,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     px_y = data[f"py_{i:02}"]
 
                     tab = ScanTab()
-                    self.tabs.addTab(tab, str(name))
+                    self.tabs.addTab(tab, name)
                     self.tabs.setCurrentWidget(tab)
                     tab.set_data(grid, xi, yi, px_x, px_y)
                 except Exception as e:
@@ -570,13 +611,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def flip_scan(self):
-        tab = self.current_tab()
-        if tab:
+        if tab := self.current_tab():
             tab.flip_scan(self)
 
     def fill_holes(self):
-        tab = self.current_tab()
-        if tab:
+        if tab := self.current_tab():
             tab.fill_holes(self)
 
     def compare_scans(self):
