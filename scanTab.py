@@ -548,7 +548,6 @@ class ScanTab(QtWidgets.QWidget):
         y = int(round(mouse_point.y()))
         if 0 <= x < self.grid.shape[1] and 0 <= y < self.grid.shape[0]:
             if self.zero_point_mode:
-                # value = self.grid[y, x]
                 value = self.get_zero_point_value(x, y)
                 if np.isnan(value):
                     QtWidgets.QMessageBox.warning(self, "Brak danych", "Wybrany punkt nie zawiera wartości (NaN).")

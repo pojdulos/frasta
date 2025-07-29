@@ -214,23 +214,6 @@ class Grid3DViewer(QtWidgets.QWidget):
             z_min (float): Minimum Z value for the plane.
             z_max (float): Maximum Z value for the plane.
         """
-        # if line_points is not None and len(line_points) > 1:
-        #     pts = np.array(line_points)
-        #     self.cross_plane_item = self.add_cross_section_plane(pts, z_min, z_max)
-        #     try:
-        #         ref_prof = reference_grid[pts[:,1], pts[:,0]]
-        #         self.ref_profile_line_item = gl.GLLinePlotItem(
-        #             pos=np.column_stack((pts[:,0], pts[:,1], ref_prof)),
-        #             color=(0,0.4,0,1), width=2)
-        #         self.view.addItem(self.ref_profile_line_item)
-        #         if adjusted_grid is not None:
-        #             adj_prof = adjusted_grid[pts[:,1], pts[:,0]] + separation
-        #             self.adj_profile_line_item = gl.GLLinePlotItem(
-        #                 pos=np.column_stack((pts[:,0], pts[:,1], adj_prof)),
-        #                 color=(0,0,1,1), width=2)
-        #             self.view.addItem(self.adj_profile_line_item)
-        #     except Exception as e:
-        #         print("[Grid3DViewer] Failed to plot profile lines:", e)
         if line_points is not None and len(line_points) > 1:
             pts = np.array(line_points)
             self.cross_plane_item = self.add_cross_section_plane(pts, z_min, z_max)
