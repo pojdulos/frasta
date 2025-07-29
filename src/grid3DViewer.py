@@ -2,6 +2,9 @@ from pyqtgraph.Qt import QtWidgets, QtGui, QtCore
 import numpy as np
 import pyqtgraph.opengl as gl
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class Grid3DViewer(QtWidgets.QWidget):
     def __init__(self, ref_surface_mode='surface', parent=None):
@@ -238,7 +241,7 @@ class Grid3DViewer(QtWidgets.QWidget):
                 (pts[:, 0] >= 0) & (pts[:, 0] < w)
             )
             if not np.all(valid_mask):
-                print("[Grid3DViewer] Some profile points are out of bounds and will be ignored.")
+                logger.warning("[Grid3DViewer] Some profile points are out of bounds and will be ignored.")
                 pts = pts[valid_mask]
                 if len(pts) < 2:
                     return  # not enough points to plot a line
@@ -255,7 +258,7 @@ class Grid3DViewer(QtWidgets.QWidget):
                         color=(0,0,1,1), width=2)
                     self.view.addItem(self.adj_profile_line_item)
             except Exception as e:
-                print("[Grid3DViewer] Failed to plot profile lines:", e)
+                logger.critical("[Grid3DViewer] Failed to plot profile lines:", e)
 
 
 
@@ -492,7 +495,3 @@ def show_3d_viewer(reference_grid, adjusted_grid=None, line_points=None, separat
     _global_3d_viewer.raise_()
     _global_3d_viewer.activateWindow()
 
-
-if __name__ == '__main__':
-    from frasta_gui import run
-    run()

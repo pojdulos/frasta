@@ -14,6 +14,9 @@ from sklearn.linear_model import LinearRegression
 from .grid3DViewer import show_3d_viewer
 from .helpers import remove_relative_offset, remove_relative_tilt
 
+import logging
+logger = logging.getLogger(__name__)
+
 def create_image_view():
     view = pg.ImageView()
     view.ui.histogram.hide()
@@ -359,12 +362,12 @@ class ProfileViewer(QtWidgets.QMainWindow):
         ref = self.reference_grid_smooth[y_min:y_max + 1, x_min:x_max + 1]
         adj = self.adjusted_grid_corrected[y_min:y_max + 1, x_min:x_max + 1]
 
-        print(f"ref0: {self.reference_grid_smooth.shape}, adj0: {self.adjusted_grid_corrected.shape}")
-        print(f"x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max: {y_max}")
-        print('ref min:', np.nanmin(ref), 'ref max:', np.nanmax(ref), 'ref shape:', ref.shape)
-        print('ref NaN count:', np.isnan(ref).sum())
-        print('adj min:', np.nanmin(adj), 'adj max:', np.nanmax(adj), 'adj shape:', adj.shape)
-        print('adj NaN count:', np.isnan(adj).sum())
+        logger.debug(f"ref0: {self.reference_grid_smooth.shape}, adj0: {self.adjusted_grid_corrected.shape}")
+        logger.debug(f"x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max: {y_max}")
+        logger.debug(f"ref min: {np.nanmin(ref)}, ref max: {np.nanmax(ref)}, ref shape: {ref.shape}")
+        logger.debug(f"ref NaN count: {np.isnan(ref).sum()}")
+        logger.debug(f"adj min: {np.nanmin(adj)}, adj max: {np.nanmax(adj)}, adj shape: {adj.shape}")
+        logger.debug(f"adj NaN count: {np.isnan(adj).sum()}")
 
         # Wyznacz linię profilu (ograniczoną do wycinka)
         if hasattr(self, 'rr') and hasattr(self, 'cc'):
@@ -395,7 +398,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
         x_range = [min_range.x(),max_range.x()]
         y_range = [min_range.y(),max_range.y()]
 
-        print(f"ViewBox x_range: {x_range}, y_range: {y_range}")
+        logger.debug(f"ViewBox x_range: {x_range}, y_range: {y_range}")
 
         if overflow:
             x_min, x_max = int(np.floor(x_range[0])), int(np.ceil(x_range[1]))-1
@@ -410,7 +413,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
             y_min = max(0, y_min)
             y_max = min(shape[0]-1, y_max)
 
-        print(f"Image x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max: {y_max}")
+        # print(f"Image x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max: {y_max}")
 
         return x_min, x_max, y_min, y_max            
 
@@ -425,7 +428,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
 
             fragment = self.binary_contact[y_min:y_max+1, x_min:x_max+1]
             
-            print(f"fragment.shape: {fragment.shape}")
+            # print(f"fragment.shape: {fragment.shape}")
 
             white_count = np.count_nonzero(fragment)
 
@@ -588,7 +591,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
 
     def print_saved_points(self):
         for i, pt in enumerate(self.saved_points):
-            print(f"{i+1}: {pt}")
+            logger.debug(f"{i+1}: {pt}")
 
     def on_plot_click(self, event):
         if event.modifiers() == QtCore.Qt.ControlModifier:
@@ -623,7 +626,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
         marker = pg.ScatterPlotItem([x_img], [y_img], size=12, pen=pg.mkPen('g', width=2), brush=pg.mkBrush(0, 255, 255, 120), symbol='+')
         self.image_view.getView().addItem(marker)
         self.saved_point_markers.append(marker)
-        print("Saved point:", self.saved_points[-1])
+        logger.debug("Saved point:", self.saved_points[-1])
 
 
     def on_mouse_move(self, pos):
@@ -749,9 +752,3 @@ class ProfileViewer(QtWidgets.QMainWindow):
             view.removeItem(self.image_marker)
             self.image_marker = None
 
-
-
-
-if __name__ == '__main__':
-    from frasta_gui import run
-    run()

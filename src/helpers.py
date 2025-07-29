@@ -7,6 +7,9 @@ from functools import wraps
 from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def resource_path(relative_path):
     """Zwraca absolutną ścieżkę do zasobu (działa i w exe, i w .py)"""
@@ -20,7 +23,7 @@ def measure_time(func):
         start = time.perf_counter()
         result = func(*args, **kwargs)
         end = time.perf_counter()
-        print(f">>> {func.__name__}() took {end - start:.4f} seconds")
+        logger.info(f">>> {func.__name__}() took {end - start:.4f} seconds")
         return result
     return wrapper
 
@@ -42,7 +45,7 @@ def compute_offset_in_center(reference, target, window_size=100):
     if masked_diff.size == 0:
         raise ValueError("Brak ważnych danych w centralnym oknie")
     offset = np.mean(masked_diff)
-    print(f'Offset w centralnym obszarze {window_size}x{window_size}: {offset:.2f}')
+    # print(f'Offset w centralnym obszarze {window_size}x{window_size}: {offset:.2f}')
     return offset
 
 def remove_relative_offset(reference, target, mask):

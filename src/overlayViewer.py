@@ -429,24 +429,3 @@ class OverlayViewer(QtWidgets.QWidget):
         self.img2.setTransform(transform)
 
 
-
-# if __name__ == '__main__':
-#     data = np.load("source_data/scan1_interp.npz")
-#     scan1 = data['grid']
-
-#     data = np.load("source_data/scan2_interp.npz")
-#     scan2 = data['grid']
-
-#     s1 = scan1 #np.where(np.isnan(scan1), np.nanmin(scan1), scan1)
-#     s2 = scan2 # np.where(np.isnan(scan2), np.nanmax(scan2), scan2)
-
-#     s2 = np.flipud(s2)
-#     s2 = -s2
-
-#     app = QtWidgets.QApplication([])
-#     viewer = OverlayViewer(s1, s2)
-#     viewer.setWindowTitle("Overlay Viewer with Sliders")
-#     viewer.resize(800, 800)
-#     viewer.show()
-#     app.exec_()
-

@@ -28,10 +28,8 @@ class AboutDialog(QtWidgets.QDialog):
         btn.clicked.connect(self.accept)
         layout.addWidget(btn, alignment=QtCore.Qt.AlignRight)
 
-# __all__ = [ "AboutDialog" ]
-
-# if __name__ == "__main__":
-#     import sys
-#     app = QtWidgets.QApplication(sys.argv)
-#     dlg = AboutDialog()
-#     dlg.exec_()
+if __name__ == "__main__":
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    dlg = AboutDialog()
+    dlg.exec_()

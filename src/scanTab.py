@@ -10,6 +10,11 @@ from .gridData import GridData
 from .helpers import fill_holes, remove_outliers, nan_aware_gaussian
 from scipy.ndimage import gaussian_filter
 
+import logging
+logger = logging.getLogger(__name__)
+
+
+
 class ScanTab(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -87,7 +92,7 @@ class ScanTab(QtWidgets.QWidget):
         self.update_image(vmin, vmax)
 
     def update_histogram_threshold(self, value):
-        # print("Zaktualizowano próg:", value)
+        logger.debug(f"Zaktualizowano próg: {value}" )
         vmin = min(self.hist_min_line.value(), self.hist_max_line.value())
         vmax = max(self.hist_min_line.value(), self.hist_max_line.value())
         self.update_image(vmin, vmax)
@@ -141,7 +146,7 @@ class ScanTab(QtWidgets.QWidget):
         self.yi = yi
         self.px_x = px_x
         self.px_y = px_y
-        print(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
+        logger.debug(f"grid: {self.grid.shape}, xmin: {self.xi[0]}, ymin: {self.yi[0]}, px_x: {self.px_x}, px_y: {self.px_y}")
         self.update_image()
         self.update_histogram()
 
@@ -241,15 +246,7 @@ class ScanTab(QtWidgets.QWidget):
         return dialog, ed_sigma, ed_thresh
 
 
-    def repair_grid(self, roi=None):
-        """Repairs the grid by filling holes, smoothing, and removing outliers, optionally within a region of interest.
-
-        This function displays a dialog for the user to select smoothing and outlier removal parameters, then processes the grid accordingly.
-        The grid is updated in-place and the image view is refreshed.
-
-        Args:
-            roi (optional): A region of interest object. If provided and visible, restricts processing to the ROI area.
-        """
+    def repair_grid(self, mask=None):
         dialog, ed_sigma, ed_thresh = self.create_repair_dialog()
         if dialog.exec_() != QtWidgets.QDialog.Accepted:
             return
@@ -257,19 +254,6 @@ class ScanTab(QtWidgets.QWidget):
         threshold = ed_thresh.value()
 
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-
-        h, w = self.grid.shape
-
-        if roi and roi.isVisible():
-            pos = roi.pos()
-            size = roi.size()
-            cx = pos.x() + size[0] / 2
-            cy = pos.y() + size[1] / 2
-            r = size[0] / 2
-            Y, X = np.ogrid[:h, :w]
-            mask = ((X - cx) ** 2 + (Y - cy) ** 2) <= r**2
-        else:
-            mask = None  # brak ograniczenia
 
         grid_filled = fill_holes(self.grid, mask=mask)
         grid_smooth = nan_aware_gaussian(grid_filled, sigma, mask=mask)
@@ -282,6 +266,7 @@ class ScanTab(QtWidgets.QWidget):
 
         self.update_image()
         QtWidgets.QApplication.restoreOverrideCursor()
+
 
     def fill_holes(self, parent=None):
         if self.grid is None:
@@ -300,15 +285,11 @@ class ScanTab(QtWidgets.QWidget):
         if not np.any(tst):
             return
 
-        print("grid.shape:", self.grid.shape)
-        print("xi len:", len(self.xi))
-        print("yi len:", len(self.yi))
+        logger.debug(f"grid.shape: {self.grid.shape}, xi len: {len(self.xi)}, yi len: {len(self.yi)}")
 
         grid_x, grid_y = np.meshgrid(self.xi, self.yi)
 
-        print("grid_x.shape:", grid_x.shape)
-        print("grid_y.shape:", grid_y.shape)
-        print("tst.shape:", tst.shape)
+        logger.debug(f"grid_x.shape: {grid_x.shape}, grid_y.shape: {grid_y.shape}, tst.shape: {tst.shape}")
 
         interp_points = np.column_stack((grid_x[tst], grid_y[tst]))
 
@@ -660,8 +641,3 @@ class ScanTab(QtWidgets.QWidget):
 
         self.seed_points = []
 
-
-if __name__ == "__main__":
-    from frasta_gui import run
-    run()
-    

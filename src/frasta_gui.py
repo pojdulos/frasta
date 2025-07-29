@@ -1,4 +1,3 @@
-import sys
 import h5py
 import numpy as np
 import pandas as pd
@@ -107,25 +106,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.currentChanged.connect(self.move_roi_to_current_tab)
 
 
-    def apply_roi_mask(self, inside):
-        """Applies the active region-of-interest (ROI) mask to the current scan tab.
+    def create_mask(self, h, w):
+        """Creates a boolean mask for the currently active ROI (circle or rectangle).
 
-        Detects which ROI (circle or rectangle) is visible and applies the corresponding mask. 
-        Depending on the 'inside' parameter, either the inside or outside of the ROI is masked out in the current tab.
+        Determines which ROI is visible and generates the corresponding mask for the given shape.
 
         Args:
-            inside (bool): If True, mask the area inside the ROI; if False, mask the area outside the ROI.
+            h (int): Height of the mask (number of rows).
+            w (int): Width of the mask (number of columns).
+
+        Returns:
+            np.ndarray or None: Boolean mask with True inside the ROI, or None if no ROI is active.
         """
-        tab = self.current_tab()
-        if tab is None or tab.grid is None:
-            return
-
-        h, w = tab.grid.shape
-
-        # Check which ROI is active and visible
         circle_visible = self.shared_circle_roi is not None and self.shared_circle_roi.isVisible()
         rect_visible = self.shared_rectangle_roi is not None and self.shared_rectangle_roi.isVisible()
 
+        mask = None
         if circle_visible:
             pos = self.shared_circle_roi.pos()
             size = self.shared_circle_roi.size()
@@ -141,9 +137,27 @@ class MainWindow(QtWidgets.QMainWindow):
             width = size[0]
             height = size[1]
             mask = self.create_rectangle_mask((h, w), (cx, cy), width, height)
-        else:
-            return  # No ROI visible
+        return mask
 
+    def apply_roi_mask(self, inside):
+        """Applies a mask to the current tab's grid based on the active ROI.
+
+        Generates a mask from the visible ROI and deletes values inside or outside the mask, depending on the 'inside' flag.
+
+        Args:
+            inside (bool): If True, deletes values inside the mask; if False, deletes values outside the mask.
+        """
+        tab = self.current_tab()
+        if tab is None or tab.grid is None:
+            return
+
+        h, w = tab.grid.shape
+
+        mask = self.create_mask(h,w)
+
+        if mask is None:
+            return
+        
         if inside:
             tab.delete_unmasked(~mask)
         else:
@@ -429,13 +443,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def repair_grid(self):
-        if tab := self.current_tab():
-            if self.shared_circle_roi and self.shared_circle_roi.isVisible():
-                tab.repair_grid(roi=self.shared_circle_roi)
-            elif self.shared_rectangle_roi and self.shared_rectangle_roi.isVisible():
-                tab.repair_grid(roi=self.shared_rectangle_roi)
-            else:
-                tab.repair_grid(roi=None)
+        tab = self.current_tab()
+        if tab is None or tab.grid is None:
+            return
+        h, w = tab.grid.shape
+        mask = self.create_mask(h, w)
+        tab.repair_grid(mask=mask)
 
     def set_zero_point_mode(self):
         if tab := self.current_tab():
@@ -854,14 +867,3 @@ class MainWindow(QtWidgets.QMainWindow):
         viewer.show()
         viewer.set_data(grid1, grid2, tab1.px_x, tab1.px_y, tab2.px_x, tab2.px_y)
 
-
-
-def run():
-    app = QtWidgets.QApplication(sys.argv)
-    win = MainWindow()
-    win.show()
-    sys.exit(app.exec_())
-
-if __name__ == "__main__":
-    run()
-    
