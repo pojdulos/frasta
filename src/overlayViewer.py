@@ -2,7 +2,7 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
-from gridData import GridData        
+from .gridData import GridData        
 
 class OverlayViewer(QtWidgets.QWidget):
     def __init__(self, scan1_data: GridData, scan2_data: GridData, on_accept=None):

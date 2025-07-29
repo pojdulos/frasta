@@ -6,13 +6,13 @@ from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtGui import QIcon
 from functools import partial
 
-from profileViewer import ProfileViewer
-from overlayViewer import OverlayViewer
-from aboutDialog import AboutDialog
-from scanTab import ScanTab
-from gridData import GridData
+from .profileViewer import ProfileViewer
+from .overlayViewer import OverlayViewer
+from .aboutDialog import AboutDialog
+from .scanTab import ScanTab
+from .gridData import GridData
 
-from grid3DViewer import show_3d_viewer
+from .grid3DViewer import show_3d_viewer
 
 class GridWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)

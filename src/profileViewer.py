@@ -11,8 +11,8 @@ import h5py
 from scipy.ndimage import gaussian_filter
 from sklearn.linear_model import LinearRegression
 
-from grid3DViewer import show_3d_viewer
-from helpers import remove_relative_offset, remove_relative_tilt
+from .grid3DViewer import show_3d_viewer
+from .helpers import remove_relative_offset, remove_relative_tilt
 
 def create_image_view():
     view = pg.ImageView()

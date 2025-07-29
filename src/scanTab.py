@@ -5,9 +5,9 @@ from skimage.segmentation import flood
 from scipy.interpolate import griddata
 import trimesh
 
-from responsiveInfiniteLine import ResponsiveInfiniteLine
-from gridData import GridData
-from helpers import fill_holes, remove_outliers, nan_aware_gaussian
+from .responsiveInfiniteLine import ResponsiveInfiniteLine
+from .gridData import GridData
+from .helpers import fill_holes, remove_outliers, nan_aware_gaussian
 from scipy.ndimage import gaussian_filter
 
 class ScanTab(QtWidgets.QWidget):
