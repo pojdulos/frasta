@@ -4,32 +4,40 @@ import pyqtgraph.opengl as gl
 
 
 class Grid3DViewer(QtWidgets.QWidget):
-    def __init__(self, reference_grid, adjusted_grid=None, line_points=None,
-                 separation=0, ref_surface_mode='surface', show_controls=True, parent=None):
+    def __init__(self, ref_surface_mode='surface', parent=None):
+        """Initializes the 3D grid viewer widget.
+
+        Sets up the user interface, control checkboxes, and 3D view for displaying grid data.
+        
+        Args:
+            ref_surface_mode (str, optional): The mode for rendering the reference surface ('surface', 'mesh', or 'wireframe').
+            parent (QWidget, optional): The parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("3D Grid Viewer")
         self.resize(900, 700)
         layout = QtWidgets.QVBoxLayout(self)
-
         self.ref_surface_mode = ref_surface_mode
-
         self.init_controls(layout)
         self.connect_controls()
-
         self.view = gl.GLViewWidget()
         layout.addWidget(self.view)
         self.view.setCameraPosition(distance=200)
-
         self.surface_ref_item = None
         self.surface_adj_item = None
         self.ref_profile_line_item = None
         self.adj_profile_line_item = None
         self.cross_plane_item = None
-
-        self.set_controls_visible(show_controls)
-        self.update_data(reference_grid, adjusted_grid=adjusted_grid, line_points=line_points, separation=separation)
+        self.show_controls = True  # domyślnie
 
     def init_controls(self, layout):
+        """Initializes the control checkboxes for toggling 3D view elements.
+
+        Adds checkboxes for reference surface, adjusted surface, profile line, and section plane to the layout.
+
+        Args:
+            layout (QVBoxLayout): The layout to which the controls are added.
+        """
         ctrl_layout = QtWidgets.QHBoxLayout()
         self.checkbox_ref = QtWidgets.QCheckBox("Show Reference Surface")
         self.checkbox_ref.setChecked(True)
@@ -44,6 +52,10 @@ class Grid3DViewer(QtWidgets.QWidget):
         layout.addLayout(ctrl_layout)
 
     def connect_controls(self):
+        """Connects the control checkboxes to their respective toggle methods.
+
+        Sets up signal-slot connections so that toggling each checkbox shows or hides the corresponding 3D view element.
+        """
         self.checkbox_ref.stateChanged.connect(self.toggle_surface_ref)
         self.checkbox_adj.stateChanged.connect(self.toggle_surface_adj)
         self.checkbox_line.stateChanged.connect(self.toggle_profile_line)
@@ -152,10 +164,11 @@ class Grid3DViewer(QtWidgets.QWidget):
         """
         if Z_ref.shape == (len(ys), len(xs)) and not np.all(np.isnan(Z_ref)):
             if self.ref_surface_mode == 'mesh':
-                self.surface_ref_item = self.make_voxel_mesh(Z_ref)
+                self.surface_ref_item = self.make_voxel_mesh(Z_ref, xs=xs, ys=ys, color=(0,1,0,1))
             elif self.ref_surface_mode == 'wireframe':
                 self.surface_ref_item = gl.GLSurfacePlotItem(
-                    x=xs, y=ys, z=Z_ref.T, color=(0,1,0,1), drawFaces=False, drawEdges=True, edgeColor=(0,1,0,1))
+                    x=xs, y=ys, z=Z_ref.T, color=(0,1,0,1),
+                    drawFaces=False, drawEdges=True, edgeColor=(0,1,0,1))
             else:
                 self.surface_ref_item = gl.GLSurfacePlotItem(
                     x=xs, y=ys, z=Z_ref.T, color=(0,1,0,1), shader='shaded')
@@ -172,7 +185,9 @@ class Grid3DViewer(QtWidgets.QWidget):
             Z_adj (np.ndarray): Processed adjusted grid.
         """
         if Z_adj.shape == (len(ys), len(xs)) and not np.all(np.isnan(Z_adj)):
-            if self.ref_surface_mode == 'wireframe':
+            if self.ref_surface_mode == 'mesh':
+                self.surface_adj_item = self.make_voxel_mesh(Z_adj, xs=xs, ys=ys, color=(0.2,0.3,1,1))
+            elif self.ref_surface_mode == 'wireframe':
                 self.surface_adj_item = gl.GLSurfacePlotItem(
                     x=xs, y=ys, z=Z_adj.T, color=(0.2,0.3,1,1), drawFaces=False, drawEdges=True, edgeColor=(0.2,0.3,1,1))
             else:
@@ -272,42 +287,94 @@ class Grid3DViewer(QtWidgets.QWidget):
         self.view.setCameraPosition(pos=QtGui.QVector3D(xc, yc, zc))
 
     def set_controls_visible(self, visible):
+        """Shows or hides the control checkboxes in the 3D viewer.
+
+        Sets the visibility of all control checkboxes and updates the widget.
+
+        Args:
+            visible (bool): Whether the controls should be visible.
+        """
         self.show_controls = visible
         if hasattr(self, "checkbox_ref"):
             for cb in [self.checkbox_ref, self.checkbox_adj, self.checkbox_line, self.checkbox_plane]:
                 cb.setVisible(visible)
             self.update()
 
-    def make_voxel_mesh(self, Z, pixel_size=1.0):
+    def make_voxel_mesh(self, Z, xs=None, ys=None, color=(0.0,0.7,0.0,1.0)):
+        """Creates an optimized 3D voxel mesh from a 2D grid, using the same x/y coordinates as surface mode.
+
+        Args:
+            Z (np.ndarray): 2D array of height values.
+            xs (np.ndarray, optional): X coordinates (length = Z.shape[1]).
+            ys (np.ndarray, optional): Y coordinates (length = Z.shape[0]).
+
+        Returns:
+            GLMeshItem: The generated 3D mesh item.
+        """
         rows, cols = Z.shape
-        verts, faces, colors = [], [], []
+        if xs is None:
+            xs = np.arange(cols)
+        if ys is None:
+            ys = np.arange(rows)
 
-        def add_quad(v0, v1, v2, v3, color):
-            idx = len(verts)
-            verts.extend([v0, v1, v2, v3])
-            faces.extend([[idx, idx+1, idx+2], [idx, idx+2, idx+3]])
-            colors.extend([color]*2)
+        # Tworzymy siatkę wierzchołków (każdy punkt siatki)
+        verts_grid = np.zeros((rows + 1, cols + 1, 3), dtype=np.float32)
+        for i in range(rows + 1):
+            for j in range(cols + 1):
+                # Uśredniamy wysokość z sąsiadujących komórek (jeśli istnieją i nie są NaN)
+                zs = []
+                for di in [0, -1]:
+                    for dj in [0, -1]:
+                        ni, nj = i + di, j + dj
+                        if 0 <= ni < rows and 0 <= nj < cols and not np.isnan(Z[ni, nj]):
+                            zs.append(Z[ni, nj])
+                z = np.mean(zs) if zs else 0.0
+                # Użyj xs, ys zamiast indeksów
+                x = xs[j-1] if j > 0 else xs[0]
+                y = ys[i-1] if i > 0 else ys[0]
+                verts_grid[i, j] = [x, y, z]
 
+        verts = verts_grid.reshape(-1, 3)
+        idx = lambda i, j: i * (cols + 1) + j
+
+        faces = []
+        # colors = []
+
+        # Wylicz normalne dla wierzchołków górnej powierzchni
+        # normals_grid = np.zeros_like(verts_grid)
+        # for i in range(1, rows):
+        #     for j in range(1, cols):
+        #         if np.isnan(Z[i-1, j-1]):
+        #             continue
+        #         dzdx = (verts_grid[i, j, 2] - verts_grid[i, j-1, 2]) / (verts_grid[i, j, 0] - verts_grid[i, j-1, 0] + 1e-8)
+        #         dzdy = (verts_grid[i, j, 2] - verts_grid[i-1, j, 2]) / (verts_grid[i, j, 1] - verts_grid[i-1, j, 1] + 1e-8)
+        #         n = np.array([-dzdx, -dzdy, 1.0])
+        #         n /= np.linalg.norm(n)
+        #         normals_grid[i, j] = n
+
+        # vertex_normals = normals_grid.reshape(-1, 3)
+
+        # Górna powierzchnia
         for i in range(rows):
             for j in range(cols):
-                z = Z[i, j]
-                if np.isnan(z):
+                if np.isnan(Z[i, j]):
                     continue
-                x0, x1 = j*pixel_size, (j+1)*pixel_size
-                y0, y1 = i*pixel_size, (i+1)*pixel_size
-                v0, v1 = [x0, y0, z], [x1, y0, z]
-                v2, v3 = [x1, y1, z], [x0, y1, z]
-                add_quad(v0, v1, v2, v3, [0.7, 0.7, 0.7, 1])
+                v00 = idx(i, j)
+                v10 = idx(i + 1, j)
+                v11 = idx(i + 1, j + 1)
+                v01 = idx(i, j + 1)
+                faces.extend(([v00, v10, v11], [v00, v11, v01]))
+                # faces.append([v00, v10, v11])
+                # faces.append([v00, v11, v01])
+                # colors.extend([[0.0, 0.7, 0.0, 1]] * 2)
 
-                if j < cols-1 and not np.isnan(Z[i, j+1]) and Z[i, j+1] != z:
-                    z2 = Z[i, j+1]
-                    add_quad([x1, y0, z], [x1, y0, z2], [x1, y1, z2], [x1, y1, z], [0.5, 0.5, 1, 1])
-                if i < rows-1 and not np.isnan(Z[i+1, j]) and Z[i+1, j] != z:
-                    z2 = Z[i+1, j]
-                    add_quad([x0, y1, z], [x1, y1, z], [x1, y1, z2], [x0, y1, z2], [0.5, 0.5, 1, 1])
+        if not len(faces):
+            return None
 
-        return gl.GLMeshItem(vertexes=np.array(verts), faces=np.array(faces),
-                             faceColors=np.array(colors), smooth=False, drawEdges=False)
+        return gl.GLMeshItem(vertexes=verts, faces=np.array(faces), #faceColors=np.array(colors),
+                            #vertexNormals=vertex_normals,
+                            color=color,
+                            shader='shaded', smooth=True, drawEdges=False)
 
     def add_cross_section_plane(self, pts, z_min, z_max):
         p0, p1 = pts[0], pts[-1]
@@ -353,34 +420,29 @@ class Grid3DViewer(QtWidgets.QWidget):
 _global_3d_viewer = None
 
 def show_3d_viewer(reference_grid, adjusted_grid=None, line_points=None, separation=0, show_controls=True):
-    """Displays a 3D viewer window for visualizing reference and adjusted grids.
+    """Displays the 3D grid viewer window with the provided data.
 
-    Opens or updates a global 3D viewer with the provided grid data, profile lines, and display options.
+    Initializes the viewer if needed, sets control visibility, updates the 3D view with new data, and brings the window to the front.
 
     Args:
-        reference_grid (np.ndarray): The reference grid data to display.
-        adjusted_grid (np.ndarray, optional): The adjusted grid data to display.
+        reference_grid (np.ndarray): The reference grid data.
+        adjusted_grid (np.ndarray, optional): The adjusted grid data.
         line_points (list or np.ndarray, optional): Points for the profile line.
         separation (float, optional): Vertical separation between surfaces.
-        show_controls (bool, optional): Whether to show control checkboxes in the viewer.
+        show_controls (bool, optional): Whether to show UI controls.
     """
     global _global_3d_viewer
     if _global_3d_viewer is None:
-        _global_3d_viewer = Grid3DViewer(
-            reference_grid=reference_grid,
-            adjusted_grid=adjusted_grid,
-            line_points=line_points,
-            separation=separation,
-            show_controls=show_controls
-        )
-    else:
-        _global_3d_viewer.set_controls_visible(show_controls)
-        _global_3d_viewer.update_data(
-            reference_grid=reference_grid,
-            adjusted_grid=adjusted_grid,
-            line_points=line_points,
-            separation=separation
-        )
+        _global_3d_viewer = Grid3DViewer()
+
+    _global_3d_viewer.set_controls_visible(show_controls)
+    _global_3d_viewer.update_data(
+        reference_grid=reference_grid,
+        adjusted_grid=adjusted_grid,
+        line_points=line_points,
+        separation=separation
+    )
+
     _global_3d_viewer.show()
     _global_3d_viewer.raise_()
     _global_3d_viewer.activateWindow()
