@@ -300,6 +300,66 @@ class Grid3DViewer(QtWidgets.QWidget):
                 cb.setVisible(visible)
             self.update()
 
+
+    def create_verts_grid(self, Z, xs, ys, cols, rows):
+        """Creates a grid of 3D vertices for a voxel mesh using provided x/y coordinates.
+
+        For each grid point, computes the vertex position by averaging the heights of neighboring cells and assigning the appropriate x/y coordinate.
+
+        Args:
+            Z (np.ndarray): 2D array of height values.
+            xs (np.ndarray): X coordinates (length = Z.shape[1]).
+            ys (np.ndarray): Y coordinates (length = Z.shape[0]).
+            cols (int): Number of columns in the grid.
+            rows (int): Number of rows in the grid.
+
+        Returns:
+            np.ndarray: 3D array of vertex positions with shape (rows+1, cols+1, 3).
+        """
+        verts_grid = np.zeros((rows + 1, cols + 1, 3), dtype=np.float32)
+        for i in range(rows + 1):
+            for j in range(cols + 1):
+                zs = []
+                for di in [0, -1]:
+                    for dj in [0, -1]:
+                        ni, nj = i + di, j + dj
+                        if 0 <= ni < rows and 0 <= nj < cols and not np.isnan(Z[ni, nj]):
+                            zs.append(Z[ni, nj])
+                z = np.mean(zs) if zs else 0.0
+                x = xs[j-1] if j > 0 else xs[0]
+                y = ys[i-1] if i > 0 else ys[0]
+                verts_grid[i, j] = [x, y, z]
+        return verts_grid
+
+
+    def calculate_normals( self, verts_grid, Z, cols, rows ):
+        """Calculates vertex normals for a voxel mesh based on the local surface gradient.
+
+        Computes normals for each vertex by estimating the local surface gradient using neighboring vertices, 
+        skipping locations where the underlying grid value is NaN.
+
+        Args:
+            verts_grid (np.ndarray): 3D array of vertex positions with shape (rows+1, cols+1, 3).
+            Z (np.ndarray): 2D array of height values.
+            cols (int): Number of columns in the grid.
+            rows (int): Number of rows in the grid.
+
+        Returns:
+            np.ndarray: Flattened array of vertex normals with shape ((rows+1)*(cols+1), 3).
+        """
+        normals_grid = np.zeros_like(verts_grid)
+        for i in range(1, rows):
+            for j in range(1, cols):
+                if np.isnan(Z[i-1, j-1]):
+                    continue
+                dzdx = (verts_grid[i, j, 2] - verts_grid[i, j-1, 2]) / (verts_grid[i, j, 0] - verts_grid[i, j-1, 0] + 1e-8)
+                dzdy = (verts_grid[i, j, 2] - verts_grid[i-1, j, 2]) / (verts_grid[i, j, 1] - verts_grid[i-1, j, 1] + 1e-8)
+                n = np.array([-dzdx, -dzdy, 1.0])
+                n /= np.linalg.norm(n)
+                normals_grid[i, j] = n
+        return normals_grid.reshape(-1, 3)
+
+
     def make_voxel_mesh(self, Z, xs=None, ys=None, color=(0.0,0.7,0.0,1.0)):
         """Creates an optimized 3D voxel mesh from a 2D grid, using the same x/y coordinates as surface mode.
 
@@ -317,22 +377,7 @@ class Grid3DViewer(QtWidgets.QWidget):
         if ys is None:
             ys = np.arange(rows)
 
-        # Tworzymy siatkę wierzchołków (każdy punkt siatki)
-        verts_grid = np.zeros((rows + 1, cols + 1, 3), dtype=np.float32)
-        for i in range(rows + 1):
-            for j in range(cols + 1):
-                # Uśredniamy wysokość z sąsiadujących komórek (jeśli istnieją i nie są NaN)
-                zs = []
-                for di in [0, -1]:
-                    for dj in [0, -1]:
-                        ni, nj = i + di, j + dj
-                        if 0 <= ni < rows and 0 <= nj < cols and not np.isnan(Z[ni, nj]):
-                            zs.append(Z[ni, nj])
-                z = np.mean(zs) if zs else 0.0
-                # Użyj xs, ys zamiast indeksów
-                x = xs[j-1] if j > 0 else xs[0]
-                y = ys[i-1] if i > 0 else ys[0]
-                verts_grid[i, j] = [x, y, z]
+        verts_grid = self.create_verts_grid(Z, xs, ys, cols, rows)
 
         verts = verts_grid.reshape(-1, 3)
         idx = lambda i, j: i * (cols + 1) + j
@@ -340,19 +385,7 @@ class Grid3DViewer(QtWidgets.QWidget):
         faces = []
         # colors = []
 
-        # Wylicz normalne dla wierzchołków górnej powierzchni
-        # normals_grid = np.zeros_like(verts_grid)
-        # for i in range(1, rows):
-        #     for j in range(1, cols):
-        #         if np.isnan(Z[i-1, j-1]):
-        #             continue
-        #         dzdx = (verts_grid[i, j, 2] - verts_grid[i, j-1, 2]) / (verts_grid[i, j, 0] - verts_grid[i, j-1, 0] + 1e-8)
-        #         dzdy = (verts_grid[i, j, 2] - verts_grid[i-1, j, 2]) / (verts_grid[i, j, 1] - verts_grid[i-1, j, 1] + 1e-8)
-        #         n = np.array([-dzdx, -dzdy, 1.0])
-        #         n /= np.linalg.norm(n)
-        #         normals_grid[i, j] = n
-
-        # vertex_normals = normals_grid.reshape(-1, 3)
+        #vertex_normals = self.calculate_normals( verts_grid, Z, cols, rows )
 
         # Górna powierzchnia
         for i in range(rows):
@@ -364,19 +397,31 @@ class Grid3DViewer(QtWidgets.QWidget):
                 v11 = idx(i + 1, j + 1)
                 v01 = idx(i, j + 1)
                 faces.extend(([v00, v10, v11], [v00, v11, v01]))
-                # faces.append([v00, v10, v11])
-                # faces.append([v00, v11, v01])
                 # colors.extend([[0.0, 0.7, 0.0, 1]] * 2)
 
         if not len(faces):
             return None
 
-        return gl.GLMeshItem(vertexes=verts, faces=np.array(faces), #faceColors=np.array(colors),
+        return gl.GLMeshItem(vertexes=verts, faces=np.array(faces),
+                            #faceColors=np.array(colors),
                             #vertexNormals=vertex_normals,
                             color=color,
                             shader='shaded', smooth=True, drawEdges=False)
 
+
     def add_cross_section_plane(self, pts, z_min, z_max):
+        """Adds a translucent cross-section plane to the 3D view.
+
+        Creates and displays a rectangular plane between two points at the specified z-range.
+
+        Args:
+            pts (np.ndarray): Array of two (x, y) points defining the plane's endpoints.
+            z_min (float): Minimum z-value for the plane.
+            z_max (float): Maximum z-value for the plane.
+
+        Returns:
+            GLMeshItem: The mesh item representing the cross-section plane.
+        """
         p0, p1 = pts[0], pts[-1]
         rect = np.array([
             [p0[0], p0[1], z_min],
