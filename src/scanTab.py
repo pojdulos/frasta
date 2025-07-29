@@ -60,7 +60,7 @@ class ScanTab(QtWidgets.QWidget):
 
         y, x = np.histogram(data, bins=1024)
         self.hist_widget.clear()
-        self.hist_plot = self.hist_widget.plot(x, y, stepMode=True, fillLevel=0, brush=(150, 150, 150, 150))
+        self.hist_plot = self.hist_widget.plot(x, y, stepMode="center", fillLevel=0, brush=(150, 150, 150, 150))
 
         # Zapamiętaj stare pozycje (jeśli istnieją)
         vmin = float(np.min(data))
@@ -452,7 +452,7 @@ class ScanTab(QtWidgets.QWidget):
         # Tu używamy RANSAC, żeby być odpornym na odstające wartości
         from sklearn.linear_model import RANSACRegressor, LinearRegression
         base_model = LinearRegression()
-        model = RANSACRegressor(base_model, min_samples=100, residual_threshold=200.0, random_state=42)
+        model = RANSACRegressor(base_model, min_samples=min(10, len(Z)), residual_threshold=200.0, random_state=42)
         model.fit(A, Z)
         a, b = model.estimator_.coef_
         c = model.estimator_.intercept_

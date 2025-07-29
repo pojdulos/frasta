@@ -491,7 +491,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
         # binary_contact = (difference <= 0) & valid_mask
         binary_contact = (difference > 0) & valid_mask
 
-        self.image_view.setImage(binary_contact.T, autoRange=False, autoLevels=True)
+        self.image_view.setImage(binary_contact.T.astype(np.uint8), autoRange=False, autoLevels=True)
 
         self.update_profile_from_roi()
 
