@@ -5,6 +5,9 @@ from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtGui import QIcon
 from functools import partial
 
+import sys
+import os
+
 from .profileViewer import ProfileViewer
 from .overlayViewer import OverlayViewer
 from .aboutDialog import AboutDialog
@@ -12,6 +15,13 @@ from .scanTab import ScanTab
 from .gridData import GridData
 
 from .grid3DViewer import show_3d_viewer
+
+
+def resource_path(relative_path):
+    """Zwraca prawidłową ścieżkę do plików zarówno w exe, jak i w .py"""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 class GridWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
@@ -286,19 +296,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 
-        self.actions["open"].setIcon(QIcon("icons/icons8-open-file1-50.png"))
-        self.actions["save_scan"].setIcon(QIcon("icons/icons8-save1-50.png"))
-        self.actions["save_multi"].setIcon(QIcon("icons/icons8-save2-50.png"))
-        self.actions["repair"].setIcon(QIcon("icons/icons8-job-50.png"))
-        self.actions["flipUD"].setIcon(QIcon("icons/flipUD.png"))
-        self.actions["flipLR"].setIcon(QIcon("icons/flipLR.png"))
-        self.actions["inverse"].setIcon(QIcon("icons/icons8-invert-50.png"))
-        self.actions["zero"].setIcon(QIcon("icons/icons8-eyedropper-50.png"))
-        self.actions["colormap"].setIcon(QIcon("icons/icons8-color-palette-50.png"))
-        self.actions["compare"].setIcon(QIcon("icons/icons8-compare-50.png"))
-        self.actions["profile"].setIcon(QIcon("icons/icons8-graph-50.png"))
-        self.actions["about"].setIcon(QIcon("icons/icons8-about-50.png"))
-        self.actions["exit"].setIcon(QIcon("icons/icons8-exit-50.png"))
+        self.actions["open"].setIcon(QIcon(resource_path("icons/icons8-open-file1-50.png")))
+        self.actions["save_scan"].setIcon(QIcon(resource_path("icons/icons8-save1-50.png")))
+        self.actions["save_multi"].setIcon(QIcon(resource_path("icons/icons8-save2-50.png")))
+        self.actions["repair"].setIcon(QIcon(resource_path("icons/icons8-job-50.png")))
+        self.actions["flipUD"].setIcon(QIcon(resource_path("icons/flipUD.png")))
+        self.actions["flipLR"].setIcon(QIcon(resource_path("icons/flipLR.png")))
+        self.actions["inverse"].setIcon(QIcon(resource_path("icons/icons8-invert-50.png")))
+        self.actions["zero"].setIcon(QIcon(resource_path("icons/icons8-eyedropper-50.png")))
+        self.actions["colormap"].setIcon(QIcon(resource_path("icons/icons8-color-palette-50.png")))
+        self.actions["compare"].setIcon(QIcon(resource_path("icons/icons8-compare-50.png")))
+        self.actions["profile"].setIcon(QIcon(resource_path("icons/icons8-graph-50.png")))
+        self.actions["about"].setIcon(QIcon(resource_path("icons/icons8-about-50.png")))
+        self.actions["exit"].setIcon(QIcon(resource_path("icons/icons8-exit-50.png")))
 
         self.actions["colormap"].setCheckable(True)
         self.actions["colormap"].setChecked(False)
