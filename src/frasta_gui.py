@@ -77,12 +77,12 @@ class MainWindow(QtWidgets.QMainWindow):
         Sets up the tab widget, recent files, actions, menus, toolbar, and shared ROI for scan management.
         """
         super().__init__()
-        self.setWindowTitle("Scan Loader & Hole Filler (Multi-Tab)")
+        self.setWindowTitle("FRASTA-toolbox")
         self.setGeometry(100, 100, 1000, 600)
 
         self.recent_files = []
         self.max_recent_files = 10
-        self.settings = QtCore.QSettings("IITiS PAN", "FRASTA - converter")
+        self.settings = QtCore.QSettings("IITiS PAN", "FRASTA-toolbox")
         self.load_recent_files()
 
         self.tabs = QtWidgets.QTabWidget()
@@ -265,7 +265,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "save_multi": QtWidgets.QAction("Save multiple scans...", self),
             "fill": QtWidgets.QAction("Fill holes", self),
             "repair": QtWidgets.QAction("Remove holes and outliers", self),
-            "flip": QtWidgets.QAction("Flip & reverse", self),
+            "flipUD": QtWidgets.QAction("Flip Up/Down", self),
+            "flipLR": QtWidgets.QAction("Flip Left/Right", self),
+            "inverse": QtWidgets.QAction("Inverse Z", self),
             "zero": QtWidgets.QAction("Set zero point", self),
             "tilt": QtWidgets.QAction("Set tilt", self),
             "colormap": QtWidgets.QAction("Toggle colormap", self),
@@ -287,8 +289,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["open"].setIcon(QIcon("icons/icons8-open-file1-50.png"))
         self.actions["save_scan"].setIcon(QIcon("icons/icons8-save1-50.png"))
         self.actions["save_multi"].setIcon(QIcon("icons/icons8-save2-50.png"))
-        self.actions["fill"].setIcon(QIcon("icons/icons8-fill-color-50.png"))
-        self.actions["flip"].setIcon(QIcon("icons/icons8-flip-48.png"))
+        self.actions["repair"].setIcon(QIcon("icons/icons8-job-50.png"))
+        self.actions["flipUD"].setIcon(QIcon("icons/flipUD.png"))
+        self.actions["flipLR"].setIcon(QIcon("icons/flipLR.png"))
+        self.actions["inverse"].setIcon(QIcon("icons/icons8-invert-50.png"))
         self.actions["zero"].setIcon(QIcon("icons/icons8-eyedropper-50.png"))
         self.actions["colormap"].setIcon(QIcon("icons/icons8-color-palette-50.png"))
         self.actions["compare"].setIcon(QIcon("icons/icons8-compare-50.png"))
@@ -305,7 +309,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["save_multi"].triggered.connect(self.save_multiple_scans)
         self.actions["fill"].triggered.connect(self.fill_holes)
         self.actions["repair"].triggered.connect(self.repair_grid)
-        self.actions["flip"].triggered.connect(self.flip_scan)
+        self.actions["flipUD"].triggered.connect(self.flipUD_scan)
+        self.actions["flipLR"].triggered.connect(self.flipLR_scan)
+        self.actions["inverse"].triggered.connect(self.invert_scan)
         self.actions["zero"].triggered.connect(self.set_zero_point_mode)
         self.actions["tilt"].triggered.connect(self.set_tilt_mode)
         self.actions["colormap"].triggered.connect(self.toggle_colormap_current_tab)
@@ -341,7 +347,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 ])
             ]),
             ("Scan &Actions", [
-                "fill", "repair", "flip", "zero", "colormap"
+                "fill", "repair", "flipUD", "flipLR", "inverse", "zero", "colormap"
             ]),
             ("&Tools", [
                 "compare", "profile"
@@ -381,8 +387,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addAction(self.actions["save_scan"])
         self.toolbar.addAction(self.actions["save_multi"])
         self.toolbar.addSeparator()
-        self.toolbar.addAction(self.actions["fill"])
-        self.toolbar.addAction(self.actions["flip"])
+        self.toolbar.addAction(self.actions["repair"])
+        self.toolbar.addAction(self.actions["flipUD"])
+        self.toolbar.addAction(self.actions["flipLR"])
+        self.toolbar.addAction(self.actions["inverse"])
         self.toolbar.addAction(self.actions["zero"])
         self.toolbar.addAction(self.actions["tilt"])
         self.toolbar.addAction(self.actions["colormap"])
@@ -721,9 +729,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.save_tabs(tabs)
 
 
-    def flip_scan(self):
+    def flipUD_scan(self):
         if tab := self.current_tab():
-            tab.flip_scan(self)
+            tab.flip_scan(direction='UD', parent=self)
+
+    def flipLR_scan(self):
+        if tab := self.current_tab():
+            tab.flip_scan(direction='LR', parent=self)
+
+    def invert_scan(self):
+        if tab := self.current_tab():
+            tab.invert_scan(parent=self)
 
     def fill_holes(self):
         if tab := self.current_tab():

@@ -201,14 +201,25 @@ class ScanTab(QtWidgets.QWidget):
         mesh.export("mesh_output.obj")
 
 
-    def flip_scan(self, parent=None):
+    def flip_scan(self, direction='UD', parent=None):
         if self.grid is None:
             QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
             return
-        self.grid = np.flipud(self.grid)
-        # self.grid = np.fliplr(self.grid)
+        if direction=='UD':
+            self.grid = np.flipud(self.grid)
+        else:
+            self.grid = np.fliplr(self.grid)
+        # self.grid = -self.grid
+        self.update_image()
+
+    def invert_scan(self, parent=None):
+        if self.grid is None:
+            QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
+            return
         self.grid = -self.grid
         self.update_image()
+        self.update_histogram()
+
 
     def create_repair_dialog(self, sigma=25, threshold=100):
         dialog = QtWidgets.QDialog(self)
