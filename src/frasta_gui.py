@@ -812,14 +812,20 @@ class MainWindow(QtWidgets.QMainWindow):
         tab1 = self.tabs.widget(idx1)
         tab2 = self.tabs.widget(idx2)
 
+        # if getattr(self, "viewer", None):
+        #     self.viewer.close()  # lub .hide() jeśli chcesz zachować stan
+        #     self.viewer = None
+
         self.viewer = OverlayViewer( 
             tab1.getGridData(), 
             tab2.getGridData(),
-            on_accept=partial(receive_aligned_grids, idx1=idx1, idx2=idx2)
+            on_accept=partial(receive_aligned_grids, idx1=idx1, idx2=idx2),
+            parent=self
         )
 
         self.viewer.setWindowTitle(f"Porównanie: {names[idx1]} vs {names[idx2]}")
         self.viewer.show()
+
 
     def start_profile_analysis(self):
         if self.tabs.count() < 2:
@@ -856,15 +862,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         tab1 = self.tabs.widget(idx1)
         tab2 = self.tabs.widget(idx2)
-
-        # grid1 = tab1.grid
-        # grid2 = tab2.grid
         grid1 = tab1.masked
         grid2 = tab2.masked
 
-        # Sprawdzenie rozmiarów
         if grid1.shape != grid2.shape:
-            # Minimalny wspólny rozmiar
             h = min(grid1.shape[0], grid2.shape[0])
             w = min(grid1.shape[1], grid2.shape[1])
             reply = QtWidgets.QMessageBox.question(
@@ -879,7 +880,15 @@ class MainWindow(QtWidgets.QMainWindow):
             grid1 = grid1[:h, :w]
             grid2 = grid2[:h, :w]
 
-        viewer = ProfileViewer()
-        viewer.show()
-        viewer.set_data(grid1, grid2, tab1.px_x, tab1.px_y, tab2.px_x, tab2.px_y)
+        # -- TYLKO JEDNO OKNO --
+        if getattr(self, "_profile_viewer", None) is None:
+            self._profile_viewer = ProfileViewer(parent=self)
 
+        self._profile_viewer.set_data(
+            grid1, grid2,
+            tab1.px_x, tab1.px_y,
+            tab2.px_x, tab2.px_y
+        )
+        self._profile_viewer.show()
+        self._profile_viewer.raise_()
+        self._profile_viewer.activateWindow()

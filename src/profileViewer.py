@@ -67,8 +67,8 @@ class ProfileWorker(QThread):
 
 
 class ProfileViewer(QtWidgets.QMainWindow):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.setWindowTitle("Interactive cross-sectional analysis")
         self.setGeometry(100, 100, 1000, 600)
 
@@ -85,19 +85,19 @@ class ProfileViewer(QtWidgets.QMainWindow):
         self._preview_win = None
 
         menubar = self.menuBar()
-        file_menu = menubar.addMenu('File')
-        self.open_action = QtWidgets.QAction('Open...', self)
-        self.open_action.triggered.connect(self.load_new_data)
-        file_menu.addAction(self.open_action)
-        file_menu.addSeparator()
-        self.exit_action = QtWidgets.QAction('Exit', self)
-        self.exit_action.triggered.connect(self.close)
-        file_menu.addAction(self.exit_action)
+        # file_menu = menubar.addMenu('File')
+        # self.open_action = QtWidgets.QAction('Open...', self)
+        # self.open_action.triggered.connect(self.load_new_data)
+        # file_menu.addAction(self.open_action)
 
         view_menu = menubar.addMenu('View')
         self.open_3d_action = QtWidgets.QAction('Show 3D view', self)
         self.open_3d_action.triggered.connect(self.show_3d_view)
         view_menu.addAction(self.open_3d_action)
+        view_menu.addSeparator()
+        self.exit_action = QtWidgets.QAction('Exit', self)
+        self.exit_action.triggered.connect(self.close)
+        view_menu.addAction(self.exit_action)
 
         central_widget = QtWidgets.QWidget()
         self.setCentralWidget(central_widget)
@@ -186,6 +186,12 @@ class ProfileViewer(QtWidgets.QMainWindow):
 
         # self.statusBar().showMessage("Gotowy")
 
+
+    def closeEvent(self, event):
+        # Powiadom klasę nadrzędną, jeśli trzeba
+        if hasattr(self.parent(), '_profile_viewer'):
+            self.parent()._profile_viewer = None
+        event.accept()
 
     def load_new_data(self):
         fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Wybierz plik HDF5", "", "HDF5 files (*.h5);;Wszystkie pliki (*)")

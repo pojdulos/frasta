@@ -5,8 +5,9 @@ from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 from .gridData import GridData        
 
 class OverlayViewer(QtWidgets.QWidget):
-    def __init__(self, scan1_data: GridData, scan2_data: GridData, on_accept=None):
-        super().__init__()
+    def __init__(self, scan1_data: GridData, scan2_data: GridData, on_accept=None, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(QtCore.Qt.Window)
 
         self.create_gui()
 
@@ -61,6 +62,12 @@ class OverlayViewer(QtWidgets.QWidget):
         self.slider_angle.valueChanged.connect(self.updateTransform)
 
         self.updateTransform()
+
+    def closeEvent(self, event):
+        p = self.parent()
+        if p and hasattr(p, "viewer"):
+            p.viewer = None
+        super().closeEvent(event)
 
     def create_gui(self):
         # Layout główny
@@ -117,9 +124,9 @@ class OverlayViewer(QtWidgets.QWidget):
         self.update_diff_btn.clicked.connect(self.update_difference_map)
         tool2_layout.addWidget(self.update_diff_btn)
 
-        self.save_button = QtWidgets.QPushButton("Save aligned grids to .h5")
-        self.save_button.clicked.connect(self.saveAlignedScans)
-        tool2_layout.addWidget(self.save_button)
+        # self.save_button = QtWidgets.QPushButton("Save aligned grids to .h5")
+        # self.save_button.clicked.connect(self.saveAlignedScans)
+        # tool2_layout.addWidget(self.save_button)
 
         self.accept_button = QtWidgets.QPushButton("Accept changes")
         self.accept_button.clicked.connect(self.accept_result)
