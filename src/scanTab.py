@@ -205,8 +205,8 @@ class ScanTab(QtWidgets.QWidget):
         if self.grid is None:
             QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
             return
-#        self.grid = np.flipud(self.grid)
-        self.grid = np.fliplr(self.grid)
+        self.grid = np.flipud(self.grid)
+        # self.grid = np.fliplr(self.grid)
         self.grid = -self.grid
         self.update_image()
 
