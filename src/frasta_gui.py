@@ -16,6 +16,8 @@ from .gridData import GridData
 
 from .grid3DViewer import show_3d_viewer
 
+import logging
+logger = logging.getLogger(__name__)
 
 def resource_path(relative_path):
     """Zwraca prawidłową ścieżkę do plików zarówno w exe, jak i w .py"""
@@ -36,16 +38,43 @@ class GridWorker(QtCore.QObject):
         chunk_size = 100_000
         total = sum(1 for _ in open(self.fname, encoding="utf-8"))
         chunks = []
-        for i, chunk in enumerate(pd.read_csv(self.fname, sep=';', header=None, names=['x','y','z'], chunksize=chunk_size)):
+
+        for i, chunk in enumerate(pd.read_csv(
+                self.fname,
+                sep=r'[;,\t ]+',
+                engine='python',
+                header=None,
+                names=['x', 'y', 'z'],
+                chunksize=chunk_size)):
+
             chunks.append(chunk)
-            self.progress.emit(int(20 + 30 * (i*chunk_size/total)))
+            self.progress.emit(int(20 + 30 * (i * chunk_size / total)))
+
         df = pd.concat(chunks, ignore_index=True)
         x, y, z = df['x'].values, df['y'].values, df['z'].values
 
+        # Oblicz typowe kroki w x i y
         dx = np.diff(np.sort(np.unique(x)))
         dy = np.diff(np.sort(np.unique(y)))
+        px_x_raw = np.median(dx[dx > 0])
+        px_y_raw = np.median(dy[dy > 0])
+        typical_step = np.median([px_x_raw, px_y_raw])
+        logger.debug(f"typical_step: {typical_step}")
+        # Automatyczna detekcja: jeśli typowy krok > 10, to uznajemy że dane są w mm
+        if typical_step < 0.1:
+            logger.info("Wykryto dane w milimetrach - przeliczam na mikrometry.")
+            x *= 1000
+            y *= 1000
+            # trzeba przeliczyć dx/dy jeszcze raz po skalowaniu
+            dx = np.diff(np.sort(np.unique(x)))
+            dy = np.diff(np.sort(np.unique(y)))
+        else:
+            logger.info("Wykryto dane w mikrometrach - brak konwersji.")
+
         px_x = np.median(dx[dx > 0]).round(2)
         px_y = np.median(dy[dy > 0]).round(2)
+
+        logger.debug(f"px_x: {px_x}, px_y: {px_y}")
 
         x_min, x_max = x.min(), x.max()
         y_min, y_max = y.min(), y.max()
@@ -277,6 +306,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "repair": QtWidgets.QAction("Remove holes and outliers", self),
             "flipUD": QtWidgets.QAction("Flip Up/Down", self),
             "flipLR": QtWidgets.QAction("Flip Left/Right", self),
+            "rot90": QtWidgets.QAction("Rotate 90-Left", self),
             "inverse": QtWidgets.QAction("Inverse Z", self),
             "zero": QtWidgets.QAction("Set zero point", self),
             "tilt": QtWidgets.QAction("Set tilt", self),
@@ -302,6 +332,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["repair"].setIcon(QIcon(resource_path("icons/icons8-job-50.png")))
         self.actions["flipUD"].setIcon(QIcon(resource_path("icons/flipUD.png")))
         self.actions["flipLR"].setIcon(QIcon(resource_path("icons/flipLR.png")))
+        self.actions["rot90"].setIcon(QIcon(resource_path("icons/icons8-rotate-left-50.png")))
         self.actions["inverse"].setIcon(QIcon(resource_path("icons/icons8-invert-50.png")))
         self.actions["zero"].setIcon(QIcon(resource_path("icons/icons8-eyedropper-50.png")))
         self.actions["colormap"].setIcon(QIcon(resource_path("icons/icons8-color-palette-50.png")))
@@ -321,6 +352,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions["repair"].triggered.connect(self.repair_grid)
         self.actions["flipUD"].triggered.connect(self.flipUD_scan)
         self.actions["flipLR"].triggered.connect(self.flipLR_scan)
+        self.actions["rot90"].triggered.connect(self.scan_rot90)
         self.actions["inverse"].triggered.connect(self.invert_scan)
         self.actions["zero"].triggered.connect(self.set_zero_point_mode)
         self.actions["tilt"].triggered.connect(self.set_tilt_mode)
@@ -357,7 +389,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 ])
             ]),
             ("Scan &Actions", [
-                "fill", "repair", "flipUD", "flipLR", "inverse", "zero", "colormap"
+                "fill", "repair", "flipUD", "flipLR", "rot90", "inverse", "zero", "colormap"
             ]),
             ("&Tools", [
                 "compare", "profile"
@@ -400,6 +432,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.addAction(self.actions["repair"])
         self.toolbar.addAction(self.actions["flipUD"])
         self.toolbar.addAction(self.actions["flipLR"])
+        self.toolbar.addAction(self.actions["rot90"])
         self.toolbar.addAction(self.actions["inverse"])
         self.toolbar.addAction(self.actions["zero"])
         self.toolbar.addAction(self.actions["tilt"])
@@ -594,7 +627,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def create_tab_and_load(self, fname):
-        if fname.endswith('.csv') or fname.endswith('.dat'):
+        if fname.endswith('.csv') or fname.endswith('.dat') or fname.endswith('.txt'):
             tab = ScanTab()
             self.tabs.addTab(tab, fname.split('/')[-1])
             self.tabs.setCurrentWidget(tab)
@@ -610,7 +643,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
     def open_file(self):
-        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open file", "", "CSV, NPZ, H5 (*.csv *.dat *.npz *.h5)")
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open file", "", "CSV, NPZ, H5 (*.csv *.dat *.txt *.npz *.h5)")
         if not fname:
             return
         self.create_tab_and_load(fname)
@@ -746,6 +779,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def flipLR_scan(self):
         if tab := self.current_tab():
             tab.flip_scan(direction='LR', parent=self)
+
+    def scan_rot90(self):
+        if tab := self.current_tab():
+            tab.scan_rot90(parent=self)
+
 
     def invert_scan(self):
         if tab := self.current_tab():

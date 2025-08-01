@@ -55,7 +55,7 @@ class ScanTab(QtWidgets.QWidget):
         self.image_view.getView().scene().sigMouseClicked.connect(self.mouse_clicked)
 
 
-    def update_histogram(self):
+    def update_histogram(self, was_data_negated=False):
         if self.grid is None:
             return
         data = self.grid[~np.isnan(self.grid)]
@@ -63,21 +63,23 @@ class ScanTab(QtWidgets.QWidget):
             self.hist_widget.clear()
             return
 
-        y, x = np.histogram(data, bins=1024)
-        self.hist_widget.clear()
-        self.hist_plot = self.hist_widget.plot(x, y, stepMode="center", fillLevel=0, brush=(150, 150, 150, 150))
-
         # Zapamiętaj stare pozycje (jeśli istnieją)
         vmin = float(np.min(data))
         vmax = float(np.max(data))
-        min_line_pos = getattr(self, 'hist_min_line', None)
-        max_line_pos = getattr(self, 'hist_max_line', None)
-        min_val = min_line_pos.value() if min_line_pos else vmin
-        max_val = max_line_pos.value() if max_line_pos else vmax
 
-        # Pozycje linii nie mogą wyjść poza nowe dane!
-        min_val = max(min_val, vmin)
-        max_val = min(max_val, vmax)
+        old_min_line = getattr(self, 'hist_min_line', None)
+        old_max_line = getattr(self, 'hist_max_line', None)
+
+        if was_data_negated:
+            min_val = np.clip(-old_max_line.value(), vmin, vmax) if old_max_line else vmin
+            max_val = np.clip(-old_min_line.value(), vmin, vmax) if old_min_line else vmax
+        else:
+            min_val = np.clip(old_min_line.value(), vmin, vmax) if old_min_line else vmin
+            max_val = np.clip(old_max_line.value(), vmin, vmax) if old_max_line else vmax
+
+        y, x = np.histogram(data, bins=1024)
+        self.hist_widget.clear()
+        self.hist_plot = self.hist_widget.plot(x, y, stepMode="center", fillLevel=0, brush=(150, 150, 150, 150))
 
         self.hist_min_line = ResponsiveInfiniteLine(update_callback=self.update_histogram_threshold, angle=90, movable=True, pen=pg.mkPen('b', width=2), hoverPen=pg.mkPen('y', width=2))
         self.hist_max_line = ResponsiveInfiniteLine(update_callback=self.update_histogram_threshold, angle=90, movable=True, pen=pg.mkPen('r', width=2), hoverPen=pg.mkPen('y', width=2))
@@ -205,11 +207,14 @@ class ScanTab(QtWidgets.QWidget):
         if self.grid is None:
             QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
             return
-        if direction=='UD':
-            self.grid = np.flipud(self.grid)
-        else:
-            self.grid = np.fliplr(self.grid)
-        # self.grid = -self.grid
+        self.grid = np.flipud(self.grid) if direction=='UD' else np.fliplr(self.grid)
+        self.update_image()
+
+    def scan_rot90(self, parent=None):
+        if self.grid is None:
+            QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
+            return
+        self.grid = np.rot90(self.grid)
         self.update_image()
 
     def invert_scan(self, parent=None):
@@ -217,8 +222,9 @@ class ScanTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(parent or self, "No data", "Load grid first.")
             return
         self.grid = -self.grid
+        self.update_histogram(was_data_negated=True)
         self.update_image()
-        self.update_histogram()
+
 
 
     def create_repair_dialog(self, sigma=25, threshold=100):

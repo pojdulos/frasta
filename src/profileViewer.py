@@ -201,7 +201,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
     def load_data_from_file(self, fname):
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         self.centralWidget().setEnabled(False)
-        self.open_action.setEnabled(False)
+        #self.open_action.setEnabled(False)
         self.statusBar().showMessage("Wczytywanie danych...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
@@ -218,7 +218,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
 
     def on_worker_finished(self, result):
         self.centralWidget().setEnabled(True)
-        self.open_action.setEnabled(True)
+        #self.open_action.setEnabled(True)
         self.progress_bar.setVisible(False)
         self.statusBar().showMessage("Gotowy")
 
@@ -461,7 +461,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
     def toggle_tilt(self, state):
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         self.centralWidget().setEnabled(False)
-        self.open_action.setEnabled(False)
+        #self.open_action.setEnabled(False)
         offset_correction = np.nanmean(self.reference_grid_smooth - self.adjusted_grid_smooth)
         self.adjusted_grid_corrected = self.adjusted_grid_smooth + offset_correction
         if self.checkbox_tilt.isChecked():
@@ -472,7 +472,7 @@ class ProfileViewer(QtWidgets.QMainWindow):
         self.update_plot()
 
         self.centralWidget().setEnabled(True)
-        self.open_action.setEnabled(True)
+        #self.open_action.setEnabled(True)
         QtWidgets.QApplication.restoreOverrideCursor()
 
         

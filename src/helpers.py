@@ -28,6 +28,21 @@ def measure_time(func):
     return wrapper
 
 
+def compute_offset_global(reference, target):
+    """
+    Oblicza średni offset tam, gdzie obie siatki mają dane (ignoruje NaN).
+    """
+    mask = ~np.isnan(reference) & ~np.isnan(target)
+    diff = reference - target
+    masked_diff = diff[mask]
+
+    if masked_diff.size == 0:
+        raise ValueError("Brak wspólnych ważnych danych w całej siatce")
+
+    offset = np.mean(masked_diff)
+    return offset
+
+
 def compute_offset_in_center(reference, target, window_size=100):
     # Rozmiary obrazów
     rows, cols = reference.shape
@@ -49,7 +64,8 @@ def compute_offset_in_center(reference, target, window_size=100):
     return offset
 
 def remove_relative_offset(reference, target, mask):
-    offset = compute_offset_in_center(reference, target, window_size=1000)
+    #offset = compute_offset_in_center(reference, target, window_size=1000)
+    offset = compute_offset_global(reference, target)
     return target + offset
 
 # def remove_relative_offset(reference, target, mask):

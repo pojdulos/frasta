@@ -173,8 +173,8 @@ class OverlayViewer(QtWidgets.QWidget):
         self.label_ty.setMinimumWidth(70)
 
         self.slider_angle = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.slider_angle.setMinimum(-300)
-        self.slider_angle.setMaximum(300)
+        self.slider_angle.setMinimum(-600)
+        self.slider_angle.setMaximum(600)
         self.slider_angle.setValue(0)
         self.label_angle = QtWidgets.QLabel("Angle: 0.0°")
         self.label_angle.setMinimumWidth(70)
