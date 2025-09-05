@@ -164,3 +164,4 @@ def remove_outliers(original_grid, smoothed_grid, threshold, mask=None):
     cleaned = original_grid.copy()
     cleaned[mask_outlier] = smoothed_grid[mask_outlier]  # lub +200 jeśli to był tylko test
     return cleaned
+

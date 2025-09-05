@@ -1,13 +1,15 @@
 from pyqtgraph.Qt import QtWidgets, QtGui, QtCore
 import numpy as np
+import pyqtgraph as pg
 import pyqtgraph.opengl as gl
+import matplotlib.pyplot as plt  # jeśli chcesz użyć colormap matplotlib
 
 import logging
 logger = logging.getLogger(__name__)
 
 
 class Grid3DViewer(QtWidgets.QWidget):
-    def __init__(self, ref_surface_mode='surface', parent=None):
+    def __init__(self, surface_mode='shaded', parent=None):
         """Initializes the 3D grid viewer widget.
 
         Sets up the user interface, control checkboxes, and 3D view for displaying grid data.
@@ -20,11 +22,22 @@ class Grid3DViewer(QtWidgets.QWidget):
         self.setWindowTitle("3D Grid Viewer")
         self.resize(900, 700)
         layout = QtWidgets.QVBoxLayout(self)
-        self.ref_surface_mode = ref_surface_mode
+
+        self.two_scans_mode = True
+
+        self.ref_surface_mode = surface_mode
+        self.adj_surface_mode = surface_mode
         self.init_controls(layout)
         self.connect_controls()
         self.view = gl.GLViewWidget()
+
+        self._init_busy_ui()
+
         layout.addWidget(self.view)
+        self.view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        layout.setStretch(0, 0)  # controls_panel
+        layout.setStretch(1, 1)  # view - niech rośnie
+
         self.view.setCameraPosition(distance=200)
         self.surface_ref_item = None
         self.surface_adj_item = None
@@ -32,7 +45,116 @@ class Grid3DViewer(QtWidgets.QWidget):
         self.adj_profile_line_item = None
         self.cross_plane_item = None
         self.show_controls = True  # domyślnie
+        self.colormap_ref = 'RG'
+        self.colormap_adj = 'RG'
 
+        # NEW: ustawienia zakresów
+        self.range_linked = False
+        self.range_ref_auto = True
+        self.range_adj_auto = True
+        self.range_ref = (None, None)  # (lo, hi) gdy auto=False
+        self.range_adj = (None, None)
+
+        self._ref_last = None
+        self._adj_last = None
+
+        self._setup_shortcuts()
+
+
+    def create_a_tools(self):
+        self.a_tools = QtWidgets.QWidget(self)
+
+        mode_bar_a = QtWidgets.QHBoxLayout(self.a_tools)
+        mode_bar_a.setContentsMargins(0,0,0,0)
+        mode_bar_a.setSpacing(6)
+
+        self.checkbox_adj = QtWidgets.QCheckBox("Adj surface:")
+        self.checkbox_adj.setChecked(True)
+        mode_bar_a.addWidget(self.checkbox_adj)
+
+        # mode_bar_a.addWidget(QtWidgets.QLabel("Adj surface: "))
+        mode_bar_a.addSpacing(12)
+
+        self.combo_mode_a = QtWidgets.QComboBox()
+        self.combo_mode_a.addItem("Surface (shaded)", userData='surface')
+        self.combo_mode_a.addItem("Wireframe",        userData='wireframe')
+        self.combo_mode_a.addItem("Mesh",             userData='mesh')
+        # ustaw wartość startową wg konstruktora
+        idx = self.combo_mode_a.findData(self.adj_surface_mode)
+        if idx >= 0: self.combo_mode_a.setCurrentIndex(idx)
+
+        self.combo_cmap_adj = QtWidgets.QComboBox()
+        self.combo_cmap_adj.addItems(["None", "RG", "B&W", "viridis", "plasma", "magma"])
+        self.combo_cmap_adj.setCurrentText('RG')
+
+        mode_bar_a.addWidget(QtWidgets.QLabel("mode:"))
+        mode_bar_a.addWidget(self.combo_mode_a)
+        mode_bar_a.addSpacing(12)
+        mode_bar_a.addWidget(QtWidgets.QLabel("colormap:"))
+        mode_bar_a.addWidget(self.combo_cmap_adj)
+        #mode_bar_a.addStretch(1)
+
+        self.chk_auto_adj = QtWidgets.QCheckBox("Auto")
+        self.chk_auto_adj.setChecked(True)
+        self.spin_lo_adj = QtWidgets.QDoubleSpinBox(); self.spin_hi_adj = QtWidgets.QDoubleSpinBox()
+        for sp in (self.spin_lo_adj, self.spin_hi_adj):
+            sp.setDecimals(6); sp.setRange(-1e12, 1e12); sp.setSingleStep(0.1); sp.setEnabled(False)
+
+        mode_bar_a.addWidget(QtWidgets.QLabel("Adj lo/hi:"))
+        mode_bar_a.addWidget(self.spin_lo_adj)
+        mode_bar_a.addWidget(self.spin_hi_adj)
+        mode_bar_a.addWidget(self.chk_auto_adj)
+        mode_bar_a.addStretch(1)
+
+        self.chk_link_ranges = QtWidgets.QCheckBox("Link ranges")
+        self.chk_link_ranges.setChecked(False)
+        mode_bar_a.addWidget(self.chk_link_ranges)
+
+    def create_r_tools(self):
+        self.r_tools = QtWidgets.QWidget(self)
+
+        mode_bar_r = QtWidgets.QHBoxLayout(self.r_tools)
+        mode_bar_r.setContentsMargins(0,0,0,0)
+        mode_bar_r.setSpacing(6)
+
+        self.checkbox_ref = QtWidgets.QCheckBox("Ref surface:")
+        self.checkbox_ref.setChecked(True)
+        mode_bar_r.addWidget(self.checkbox_ref)
+
+        # mode_bar_r.addWidget(QtWidgets.QLabel("Ref surface: "))
+        mode_bar_r.addSpacing(12)
+
+        self.combo_mode_r = QtWidgets.QComboBox()
+        self.combo_mode_r.addItem("Surface (shaded)", userData='surface')
+        self.combo_mode_r.addItem("Wireframe",        userData='wireframe')
+        self.combo_mode_r.addItem("Mesh",             userData='mesh')
+        # ustaw wartość startową wg konstruktora
+        idx = self.combo_mode_r.findData(self.ref_surface_mode)
+        if idx >= 0: self.combo_mode_r.setCurrentIndex(idx)
+
+        self.combo_cmap_ref = QtWidgets.QComboBox()
+        self.combo_cmap_ref.addItems(["None", "RG", "B&W", "viridis", "plasma", "magma"])
+        self.combo_cmap_ref.setCurrentText('RG')
+
+        mode_bar_r.addWidget(QtWidgets.QLabel("mode:"))
+        mode_bar_r.addWidget(self.combo_mode_r)
+        mode_bar_r.addSpacing(12)
+        mode_bar_r.addWidget(QtWidgets.QLabel("colormap:"))
+        mode_bar_r.addWidget(self.combo_cmap_ref)
+        #mode_bar_r.addStretch(1)
+
+        self.chk_auto_ref = QtWidgets.QCheckBox("Auto")
+        self.chk_auto_ref.setChecked(True)
+        self.spin_lo_ref = QtWidgets.QDoubleSpinBox(); self.spin_hi_ref = QtWidgets.QDoubleSpinBox()
+        for sp in (self.spin_lo_ref, self.spin_hi_ref):
+            sp.setDecimals(6); sp.setRange(-1e12, 1e12); sp.setSingleStep(0.1); sp.setEnabled(False)
+
+        mode_bar_r.addWidget(QtWidgets.QLabel("Ref lo/hi:"))
+        mode_bar_r.addWidget(self.spin_lo_ref)
+        mode_bar_r.addWidget(self.spin_hi_ref)
+        mode_bar_r.addWidget(self.chk_auto_ref)
+        mode_bar_r.addStretch(1)
+    
     def init_controls(self, layout):
         """Initializes the control checkboxes for toggling 3D view elements.
 
@@ -41,18 +163,39 @@ class Grid3DViewer(QtWidgets.QWidget):
         Args:
             layout (QVBoxLayout): The layout to which the controls are added.
         """
+
+        self.controls_panel = QtWidgets.QWidget(self)
+        self.controls_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                                  QtWidgets.QSizePolicy.Fixed)
+
+        panel = QtWidgets.QVBoxLayout(self.controls_panel)
+        panel.setContentsMargins(0,0,0,0)
+        panel.setSpacing(6)
+
+        self.create_r_tools()
+        for w in (self.r_tools,):
+            w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            w.setMaximumHeight(w.sizeHint().height())
+
+        self.create_a_tools()
+        for w in (self.a_tools,):
+            w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            w.setMaximumHeight(w.sizeHint().height())
+
+        panel.addWidget(self.r_tools)
+        panel.addWidget(self.a_tools)
+
         ctrl_layout = QtWidgets.QHBoxLayout()
-        self.checkbox_ref = QtWidgets.QCheckBox("Show Reference Surface")
-        self.checkbox_ref.setChecked(True)
-        self.checkbox_adj = QtWidgets.QCheckBox("Show Adjusted Surface")
-        self.checkbox_adj.setChecked(True)
         self.checkbox_line = QtWidgets.QCheckBox("Show Profile Line")
         self.checkbox_line.setChecked(True)
         self.checkbox_plane = QtWidgets.QCheckBox("Show Section Plane")
         self.checkbox_plane.setChecked(True)
-        for cb in [self.checkbox_ref, self.checkbox_adj, self.checkbox_line, self.checkbox_plane]:
+        for cb in [self.checkbox_line, self.checkbox_plane]:
             ctrl_layout.addWidget(cb)
-        layout.addLayout(ctrl_layout)
+
+        panel.addLayout(ctrl_layout)
+
+        layout.addWidget(self.controls_panel)
 
     def connect_controls(self):
         """Connects the control checkboxes to their respective toggle methods.
@@ -63,6 +206,139 @@ class Grid3DViewer(QtWidgets.QWidget):
         self.checkbox_adj.stateChanged.connect(self.toggle_surface_adj)
         self.checkbox_line.stateChanged.connect(self.toggle_profile_line)
         self.checkbox_plane.stateChanged.connect(self.toggle_cross_plane)
+
+        self.combo_mode_r.currentIndexChanged.connect(self._ui_mode_changed_r)
+        self.combo_cmap_ref.currentIndexChanged.connect(self._ui_cmap_ref_changed)
+
+        self.combo_mode_a.currentIndexChanged.connect(self._ui_mode_changed_a)
+        self.combo_cmap_adj.currentIndexChanged.connect(self._ui_cmap_adj_changed)
+
+        self.chk_link_ranges.toggled.connect(self._ui_link_toggled)
+        self.chk_auto_ref.toggled.connect(self._ui_auto_ref_toggled)
+        self.chk_auto_adj.toggled.connect(self._ui_auto_adj_toggled)
+
+        self.spin_lo_ref.valueChanged.connect(lambda _: self._ui_lohi_changed('ref'))
+        self.spin_hi_ref.valueChanged.connect(lambda _: self._ui_lohi_changed('ref'))
+        self.spin_lo_adj.valueChanged.connect(lambda _: self._ui_lohi_changed('adj'))
+        self.spin_hi_adj.valueChanged.connect(lambda _: self._ui_lohi_changed('adj'))
+
+
+    def _compute_auto_lo_hi(self, Z, p=(2, 98)):
+        # robustne percentyle, fallback na min/max
+        lo, hi = np.nanpercentile(Z, p)
+        if not np.isfinite(hi - lo) or hi <= lo:
+            lo, hi = np.nanmin(Z), np.nanmax(Z)
+        if not np.isfinite(hi - lo) or hi <= lo:
+            hi = lo + 1e-6
+        return float(lo), float(hi)
+
+    def _block(self, *widgets, block=True):
+        for w in widgets: w.blockSignals(block)
+
+    def _update_range_widgets(self, which, lo, hi, auto):
+        if which == 'ref':
+            self._block(self.spin_lo_ref, self.spin_hi_ref, block=True)
+            self.spin_lo_ref.setValue(lo); self.spin_hi_ref.setValue(hi)
+            self._block(self.spin_lo_ref, self.spin_hi_ref, block=False)
+            self.chk_auto_ref.setChecked(auto)
+            self.spin_lo_ref.setEnabled(not auto); self.spin_hi_ref.setEnabled(not auto)
+        else:
+            self._block(self.spin_lo_adj, self.spin_hi_adj, block=True)
+            self.spin_lo_adj.setValue(lo); self.spin_hi_adj.setValue(hi)
+            self._block(self.spin_lo_adj, self.spin_hi_adj, block=False)
+            self.chk_auto_adj.setChecked(auto)
+            self.spin_lo_adj.setEnabled(not auto); self.spin_hi_adj.setEnabled(not auto)
+
+        # „Link ranges” dezaktywuje pola Adj (podążają za Ref)
+        linked = self.chk_link_ranges.isChecked()
+        self.spin_lo_adj.setEnabled(not (linked or self.chk_auto_adj.isChecked()))
+        self.spin_hi_adj.setEnabled(not (linked or self.chk_auto_adj.isChecked()))
+
+    def _get_lo_hi_for(self, which, Z):
+        # zwraca (lo, hi) biorąc pod uwagę link/auto/manual
+        if which == 'adj' and self.range_linked:
+            which = 'ref'   # użyj ref-owych ustawień
+
+        auto = (self.range_ref_auto if which == 'ref' else self.range_adj_auto)
+        if auto:
+            return self._compute_auto_lo_hi(Z)
+        rng = (self.range_ref if which == 'ref' else self.range_adj)
+        lo, hi = rng
+        if lo is None or hi is None or not np.isfinite(hi - lo) or hi <= lo:
+            return self._compute_auto_lo_hi(Z)
+        return float(lo), float(hi)
+
+    def _init_busy_ui(self):
+        # półprzezroczysty overlay z paskiem
+        self._busy_wrap = QtWidgets.QWidget(self)
+        self._busy_wrap.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        self._busy_wrap.setAttribute(QtCore.Qt.WA_NoSystemBackground)
+        self._busy_wrap.setVisible(False)
+
+        self._busy_bar = QtWidgets.QProgressBar(self._busy_wrap)
+        self._busy_bar.setRange(0, 0)              # indeterminate
+        self._busy_bar.setTextVisible(False)
+        self._busy_bar.setFixedWidth(180)
+        self._busy_bar.setStyleSheet(
+            "QProgressBar{background:rgba(0,0,0,120); border-radius:6px;}"
+            "QProgressBar::chunk{background:rgba(0,180,90,220);} ")
+
+        # pozycjonowanie w prawym-dolnym rogu
+        lay = QtWidgets.QHBoxLayout(self._busy_wrap)
+        lay.setContentsMargins(0,0,8,8)
+        lay.addStretch(1)
+        v = QtWidgets.QVBoxLayout(); v.addStretch(1); v.addWidget(self._busy_bar)
+        lay.addLayout(v)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if hasattr(self, "_busy_wrap"):
+            self._busy_wrap.resize(self.size())
+
+
+    def _begin_redraw(self):
+        # licznik zagnieżdżeń; można wołać wielokrotnie
+        if not hasattr(self, "_busyDepth"): self._busyDepth = 0
+        self._busyDepth += 1
+        if self._busyDepth == 1:
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+            self._busy_wrap.setVisible(True)
+
+    def _end_redraw_now(self):
+        d = getattr(self, "_busyDepth", 0)
+        if d <= 1:
+            self._busyDepth = 0
+            self._busy_wrap.setVisible(False)
+            QtWidgets.QApplication.restoreOverrideCursor()
+        else:
+            self._busyDepth = d - 1
+
+    def _await_next_frame_then_end(self):
+        """Zdejmij WAIT dopiero, gdy ramka będzie na ekranie."""
+        # uniknij wielokrotnych podłączeń
+        if getattr(self, "_awaitingSwap", False):
+            return
+        self._awaitingSwap = True
+
+        def _done():
+            self._awaitingSwap = False
+            try: self.view.frameSwapped.disconnect(_done)
+            except Exception: pass
+            self._end_redraw_now()
+
+        # preferuj prawdziwy sygnał QOpenGLWidget:
+        if hasattr(self.view, "frameSwapped"):
+            try:
+                self.view.frameSwapped.connect(_done)
+            except Exception:
+                QtCore.QTimer.singleShot(0, _done)
+        else:
+            # bardzo stary Qt/QGLWidget – fallback
+            QtCore.QTimer.singleShot(0, _done)
+
+        # upewnij się, że rzeczywiście będzie repaint
+        self.view.update()
+
 
     def remove_existing_items(self):
         """Removes all existing items from the 3D view.
@@ -97,8 +373,20 @@ class Grid3DViewer(QtWidgets.QWidget):
         xs, ys, Z_ref = self._prepare_reference_surface(reference_grid)
         Z_adj = self._prepare_adjusted_surface(adjusted_grid, ys, xs, separation, Z_ref)
 
-        self._add_reference_surface(xs, ys, Z_ref)
-        self._add_adjusted_surface(xs, ys, Z_adj)
+        # tuż po wyznaczeniu xs, ys, Z_ref i Z_adj:
+        self._ref_last = (xs, ys, Z_ref)
+        self._adj_last = (xs, ys, Z_adj)
+
+        # NEW: ustaw spinboksy wg auto obliczeń (nie nadpisuje manualnych wartości)
+        if self.range_ref_auto and np.any(np.isfinite(Z_ref)):
+            lo, hi = self._compute_auto_lo_hi(Z_ref)
+            self._update_range_widgets('ref', lo, hi, auto=True)
+        if self.range_adj_auto and np.any(np.isfinite(Z_adj)):
+            lo, hi = self._compute_auto_lo_hi(Z_adj)
+            self._update_range_widgets('adj', lo, hi, auto=True)
+
+        self._add_reference_surface(xs, ys, Z_ref, colormap=self.colormap_ref)
+        self._add_adjusted_surface(xs, ys, Z_adj,  colormap=self.colormap_adj)
 
         if not np.any(np.isfinite(Z_ref)) and not np.any(np.isfinite(Z_adj)):
             return  # nothing to display safely
@@ -155,48 +443,248 @@ class Grid3DViewer(QtWidgets.QWidget):
             Z_adj = np.full_like(Z_ref, np.nan)
         return Z_adj
 
-    def _add_reference_surface(self, xs, ys, Z_ref):
-        """Adds the reference surface to the 3D view if valid data is present.
 
-        Depending on the surface mode, creates either a voxel mesh, a shaded surface plot, or a wireframe and adds it to the view.
 
-        Args:
-            xs (np.ndarray): X-axis indices.
-            ys (np.ndarray): Y-axis indices.
-            Z_ref (np.ndarray): Processed reference grid.
-        """
-        if Z_ref.shape == (len(ys), len(xs)) and not np.all(np.isnan(Z_ref)):
-            if self.ref_surface_mode == 'mesh':
-                self.surface_ref_item = self.make_voxel_mesh(Z_ref, xs=xs, ys=ys, color=(0,1,0,1))
-            elif self.ref_surface_mode == 'wireframe':
-                self.surface_ref_item = gl.GLSurfacePlotItem(
-                    x=xs, y=ys, z=Z_ref.T, color=(0,1,0,1),
-                    drawFaces=False, drawEdges=True, edgeColor=(0,1,0,1))
-            else:
-                self.surface_ref_item = gl.GLSurfacePlotItem(
-                    x=xs, y=ys, z=Z_ref.T, color=(0,1,0,1), shader='shaded')
-            self.view.addItem(self.surface_ref_item)
+    def _upsert_gl_surface(self, item_attr, xs, ys, Z):
+        """Ensure GLSurfacePlotItem exists and has updated geometry."""
+        item = getattr(self, item_attr, None)
+        if item is None or not isinstance(item, gl.GLSurfacePlotItem):
+            # usuń poprzedni obiekt (np. z trybu 'mesh'), jeśli był
+            if item is not None:
+                try: self.view.removeItem(item)
+                except Exception: pass
+            item = gl.GLSurfacePlotItem(x=xs, y=ys, z=Z.T)
+            setattr(self, item_attr, item)
+            self.view.addItem(item)
+        else:
+            item.setData(x=xs, y=ys, z=Z.T)
+        return item
 
-    def _add_adjusted_surface(self, xs, ys, Z_adj):
-        """Adds the adjusted surface to the 3D view if valid data is present.
+    def _style_gl_surface(self, item, Z, mode, color, colormap, which):
+        """Apply rendering mode and colors to an existing GLSurfacePlotItem."""
+        if mode == 'wireframe':
+            item.setShader(None)
+            item.opts['drawFaces'] = False
+            item.opts['drawEdges'] = True
+            item.opts['edgeColor'] = color
+            item.setGLOptions('opaque')
+            item.update()
+            return
 
-        Creates a shaded surface plot or wireframe for the adjusted grid and adds it to the view.
+        # faces mode
+        item.opts['drawFaces'] = True
+        item.opts['drawEdges'] = False
+        item.update()
 
-        Args:
-            xs (np.ndarray): X-axis indices.
-            ys (np.ndarray): Y-axis indices.
-            Z_adj (np.ndarray): Processed adjusted grid.
-        """
-        if Z_adj.shape == (len(ys), len(xs)) and not np.all(np.isnan(Z_adj)):
-            if self.ref_surface_mode == 'mesh':
-                self.surface_adj_item = self.make_voxel_mesh(Z_adj, xs=xs, ys=ys, color=(0.2,0.3,1,1))
-            elif self.ref_surface_mode == 'wireframe':
-                self.surface_adj_item = gl.GLSurfacePlotItem(
-                    x=xs, y=ys, z=Z_adj.T, color=(0.2,0.3,1,1), drawFaces=False, drawEdges=True, edgeColor=(0.2,0.3,1,1))
-            else:
-                self.surface_adj_item = gl.GLSurfacePlotItem(
-                    x=xs, y=ys, z=Z_adj.T, color=(0.2,0.3,1,1), shader='shaded')
-            self.view.addItem(self.surface_adj_item)
+        if colormap is None:
+            colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
+            colors[...] = color  # (r,g,b,a)
+            item.opts['color'] = color
+        else:    
+            lo, hi = self._get_lo_hi_for(which, Z)
+            zprime = np.clip((Z - lo) / (hi - lo + 1e-12), 0.0, 1.0)
+            zT = zprime.T
+
+            if colormap == 'RG':
+                colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
+                colors[..., 0] = 1.0 - zT   # R
+                colors[..., 1] = zT         # G
+                colors[..., 2] = 0.0        # B
+                colors[..., 3] = 1.0        # A
+            elif colormap == 'B&W':
+                colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
+                colors[..., 0] = zT
+                colors[..., 1] = zT
+                colors[..., 2] = zT
+                colors[..., 3] = 1.0
+            else: # kolormapy z pyqtgraph
+                cm = pg.colormap.get(colormap)
+                colors = cm.map(zT, mode='float')
+
+        colors = np.ascontiguousarray(colors, dtype=np.float32)
+        item.setData(colors=colors)
+        item.setShader('shaded')
+        item.setGLOptions('opaque')   # zmień na 'translucent' jeśli gdzieś ustawiasz A<1
+
+    def _ui_link_toggled(self, on):
+        self.range_linked = bool(on)
+        # zaktualizuj widoczność/aktywność pól
+        self._update_range_widgets('ref',
+            self.spin_lo_ref.value(), self.spin_hi_ref.value(), self.chk_auto_ref.isChecked())
+        self._update_range_widgets('adj',
+            self.spin_lo_adj.value(), self.spin_hi_adj.value(), self.chk_auto_adj.isChecked())
+        self._refresh_surfaces()
+
+    def _ui_auto_ref_toggled(self, on):
+        self.range_ref_auto = bool(on)
+        # przy auto – przelicz i wstaw do spinboksów (tylko jako display)
+        if self._ref_last is not None and on:
+            _, _, Z = self._ref_last
+            lo, hi = self._compute_auto_lo_hi(Z)
+            self._update_range_widgets('ref', lo, hi, auto=True)
+        else:
+            self.spin_lo_ref.setEnabled(True); self.spin_hi_ref.setEnabled(True)
+        self._refresh_surfaces()
+
+    def _ui_auto_adj_toggled(self, on):
+        self.range_adj_auto = bool(on)
+        if self._adj_last is not None and on:
+            _, _, Z = self._adj_last
+            lo, hi = self._compute_auto_lo_hi(Z)
+            self._update_range_widgets('adj', lo, hi, auto=True)
+        else:
+            # może zostać nadpisane przez „link”
+            self.spin_lo_adj.setEnabled(not (self.range_linked or on))
+            self.spin_hi_adj.setEnabled(not (self.range_linked or on))
+        self._refresh_surfaces()
+
+    def _ui_lohi_changed(self, which):
+        # zapis manualnych zakresów + odświeżenie
+        if which == 'ref':
+            self.range_ref = (self.spin_lo_ref.value(), self.spin_hi_ref.value())
+            if self.range_linked:
+                # odśwież pola Adj wizualnie
+                self._update_range_widgets('adj', *self.range_ref, auto=self.range_adj_auto)
+        else:
+            self.range_adj = (self.spin_lo_adj.value(), self.spin_hi_adj.value())
+        self._refresh_surfaces()
+
+    def _place_surface(self, item_attr, xs, ys, Z, mode, color, colormap):
+        if Z.shape != (len(ys), len(xs)) or np.all(np.isnan(Z)):
+            return
+
+        if mode == 'mesh':
+            old = getattr(self, item_attr, None)
+            if old is not None:
+                try: self.view.removeItem(old)
+                except Exception: pass
+            item = (self.make_voxel_mesh(Z, xs=xs, ys=ys, color=color)
+                    if colormap is None
+                    else self.make_voxel_mesh(Z, xs=xs, ys=ys, colormap=colormap))
+            setattr(self, item_attr, item)
+            self.view.addItem(item)
+        else:
+            item = self._upsert_gl_surface(item_attr, xs, ys, Z)
+            which = 'ref' if item_attr == 'surface_ref_item' else 'adj'
+            self._style_gl_surface(item, Z, mode, color, colormap, which)
+
+
+
+    # --- public wrappers -------------------------------------------------------
+
+    def _add_reference_surface(self, xs, ys, Z, colormap='RG'):
+        """Adds/updates the reference surface."""
+        kolor = (0, 1, 0, 1)
+        self._place_surface('surface_ref_item', xs, ys, Z, self.ref_surface_mode, kolor, colormap)
+
+    def _add_adjusted_surface(self, xs, ys, Z, colormap='RG'):
+        """Adds/updates the adjusted surface."""
+        kolor = (0.2, 0.3, 1, 1)
+        self._place_surface('surface_adj_item', xs, ys, Z, self.adj_surface_mode, kolor, colormap)
+
+    def set_view_mode(self, mode, colormap=None):
+        # zakładam, że trzymasz ostatnią siatkę:
+        xs, ys, Z = self._ref_last  # np. ustawiane w _place_surface
+
+        if mode == 'mesh':
+            self._place_surface('surface_ref_item', xs, ys, Z, 'mesh', (0,1,0,1), colormap)
+            return
+
+        # upewnij się, że mamy GLSurfacePlotItem (tworzy jeśli brak)
+        item = self._upsert_gl_surface('surface_ref_item', xs, ys, Z)
+
+        # przełącz w locie tryb i kolory (zero duplikacji geometrii)
+        if mode == 'wireframe':
+            self._style_gl_surface(item, Z, 'wireframe', (0,1,0,1), None)
+        else:  # 'surface' / cokolwiek nie-'wireframe'
+            self._style_gl_surface(item, Z, 'surface', (0,1,0,1), colormap)  # np. 'RG' albo 'viridis'
+
+
+    def _setup_shortcuts(self):
+        QtWidgets.QShortcut(QtGui.QKeySequence("1"), self, activated=lambda: self.combo_mode_r.setCurrentIndex(self.combo_mode_r.findData('wireframe')))
+        QtWidgets.QShortcut(QtGui.QKeySequence("2"), self, activated=lambda: self.combo_mode_r.setCurrentIndex(self.combo_mode_r.findData('surface')))
+        QtWidgets.QShortcut(QtGui.QKeySequence("3"), self, activated=lambda: self.combo_mode_r.setCurrentIndex(self.combo_mode_r.findData('mesh')))
+
+    def _refresh_surfaces(self):
+        self._begin_redraw()
+        try:
+            if self._ref_last is not None:
+                xs, ys, Z = self._ref_last
+                self._place_surface('surface_ref_item', xs, ys, Z,
+                                    self.ref_surface_mode, (0,1,0,1), self.colormap_ref)
+            if self._adj_last is not None and not np.all(np.isnan(self._adj_last[2])):
+                xs, ys, Z = self._adj_last
+                self._place_surface('surface_adj_item', xs, ys, Z,
+                                    self.adj_surface_mode, (0.2,0.3,1,1), self.colormap_adj)
+        finally:
+            self._await_next_frame_then_end()
+
+    # def _ui_mode_changed(self, _idx):
+    #     mode = self.combo_mode_r.currentData()
+    #     self.ref_surface_mode = mode
+    #     self.adj_surface_mode = mode
+    #     self._refresh_surfaces()
+
+    def _ui_mode_changed_r(self, _idx):
+        mode = self.combo_mode_r.currentData()
+        self.ref_surface_mode = mode
+        self._refresh_surfaces()
+
+    def _ui_mode_changed_a(self, _idx):
+        mode = self.combo_mode_a.currentData()
+        self.adj_surface_mode = mode
+        self._refresh_surfaces()
+
+
+    def _ui_cmap_ref_changed(self, _idx):
+        txt = self.combo_cmap_ref.currentText()
+        self.colormap_ref = None if txt == "None" else txt
+        self._refresh_surfaces()
+
+    def _ui_cmap_adj_changed(self, _idx):
+        txt = self.combo_cmap_adj.currentText()
+        self.colormap_adj = None if txt == "None" else txt
+        self._refresh_surfaces()
+
+    def contextMenuEvent(self, ev: QtGui.QContextMenuEvent):
+        m = QtWidgets.QMenu(self)
+        group = QtWidgets.QActionGroup(m)
+        a_surface   = m.addAction("Surface (shaded)"); a_surface.setCheckable(True); a_surface.setActionGroup(group)
+        a_wireframe = m.addAction("Wireframe");        a_wireframe.setCheckable(True); a_wireframe.setActionGroup(group)
+        a_mesh      = m.addAction("Mesh");             a_mesh.setCheckable(True); a_mesh.setActionGroup(group)
+
+        mode = self.ref_surface_mode
+        a_surface.setChecked(mode=='surface')
+        a_wireframe.setChecked(mode=='wireframe')
+        a_mesh.setChecked(mode=='mesh')
+
+        m.addSeparator()
+        sub_ref = m.addMenu("Ref colormap")
+        for name in ["None","RG","viridis","plasma","magma"]:
+            act = sub_ref.addAction(name); act.setCheckable(True)
+            act.setChecked((self.colormap_ref or "None")==name)
+            act.triggered.connect(lambda _, n=name: self._set_ref_cmap_from_menu(n))
+
+        if self.two_scans_mode:
+            sub_adj = m.addMenu("Adj colormap")
+            for name in ["None","RG","viridis","plasma","magma"]:
+                act = sub_adj.addAction(name); act.setCheckable(True)
+                act.setChecked((self.colormap_adj or "None")==name)
+                act.triggered.connect(lambda _, n=name: self._set_adj_cmap_from_menu(n))
+
+        chosen = m.exec_(ev.globalPos())
+        if chosen is a_surface:   self.combo_mode_r.setCurrentIndex(self.combo_mode_r.findData('surface'))
+        if chosen is a_wireframe: self.combo_mode_r.setCurrentIndex(self.combo_mode_r.findData('wireframe'))
+        if chosen is a_mesh:      self.combo_mode_r.setCurrentIndex(self.combo_mode_r.findData('mesh'))
+
+    def _set_ref_cmap_from_menu(self, name):
+        i = self.combo_cmap_ref.findText(name)
+        if i >= 0: self.combo_cmap_ref.setCurrentIndex(i)
+
+    def _set_adj_cmap_from_menu(self, name):
+        i = self.combo_cmap_adj.findText(name)
+        if i >= 0: self.combo_cmap_adj.setCurrentIndex(i)
+
 
     def _compute_z_limits(self, Z_ref, Z_adj, has_adjusted):
         """Computes the minimum and maximum Z values for the 3D view.
@@ -260,8 +748,6 @@ class Grid3DViewer(QtWidgets.QWidget):
             except Exception as e:
                 logger.critical("[Grid3DViewer] Failed to plot profile lines:", e)
 
-
-
     def _center_camera(self, xs, ys, Z_ref, Z_adj, line_points):
         """Recenters the 3D camera based on the current data bounds.
 
@@ -297,9 +783,15 @@ class Grid3DViewer(QtWidgets.QWidget):
         Args:
             visible (bool): Whether the controls should be visible.
         """
+        self.two_scans_mode = visible
         self.show_controls = visible
         if hasattr(self, "checkbox_ref"):
-            for cb in [self.checkbox_ref, self.checkbox_adj, self.checkbox_line, self.checkbox_plane]:
+            for cb in [self.checkbox_line, self.checkbox_plane]:
+                cb.setVisible(visible)
+            self.update()
+
+        if hasattr(self, "a_tools"):
+            for cb in [self.a_tools,]:
                 cb.setVisible(visible)
             self.update()
 
@@ -363,7 +855,7 @@ class Grid3DViewer(QtWidgets.QWidget):
         return normals_grid.reshape(-1, 3)
 
 
-    def make_voxel_mesh(self, Z, xs=None, ys=None, color=(0.0,0.7,0.0,1.0)):
+    def make_voxel_mesh(self, Z, xs=None, ys=None, color=(0.0,0.7,0.0,1.0), colormap=None):
         """Creates an optimized 3D voxel mesh from a 2D grid, using the same x/y coordinates as surface mode.
 
         Args:
@@ -374,6 +866,7 @@ class Grid3DViewer(QtWidgets.QWidget):
         Returns:
             GLMeshItem: The generated 3D mesh item.
         """
+    
         rows, cols = Z.shape
         if xs is None:
             xs = np.arange(cols)
@@ -405,11 +898,30 @@ class Grid3DViewer(QtWidgets.QWidget):
         if not len(faces):
             return None
 
-        return gl.GLMeshItem(vertexes=verts, faces=np.array(faces),
-                            #faceColors=np.array(colors),
-                            #vertexNormals=vertex_normals,
-                            color=color,
-                            shader='shaded', smooth=True, drawEdges=False)
+        # Mapowanie wysokości na kolory
+        if colormap is None:
+            vertex_colors = np.tile(color, (verts.shape[0], 1))
+        elif colormap in ('RG','B&W',):
+            # vertex_colors = create_colors(Z, colormap)
+            logger.warning("You can't set custom colormaps in 'Mesh' mode, using solid color instead")
+            vertex_colors = np.tile(color, (verts.shape[0], 1))
+        else:
+            z_vals = verts[:, 2]
+            z_min, z_max = np.nanmin(z_vals), np.nanmax(z_vals)
+            normed = (z_vals - z_min) / (z_max - z_min + 1e-8)
+            cmap = plt.get_cmap(colormap)
+            vertex_colors = cmap(normed)  # shape (N, 4)
+
+        # print(f"vertex_colors.shape: {vertex_colors.shape}, vertex_colors.dtype: {vertex_colors.dtype}")
+
+        return gl.GLMeshItem(
+            vertexes=verts,
+            faces=np.array(faces),
+            vertexColors=vertex_colors,
+            shader='shaded',
+            smooth=True,
+            drawEdges=False
+        )
 
 
     def add_cross_section_plane(self, pts, z_min, z_max):
