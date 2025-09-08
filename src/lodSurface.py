@@ -85,7 +85,7 @@ class LODSurface:
 
         md = gl.MeshData(vertexes=V, faces=faces)
         it = gl.GLMeshItem(meshdata=md, smooth=True, drawEdges=False, drawFaces=True, shader='shaded')
-        it._mesh = md   # przechowuj MeshData w itemie (kompatybilnie wstecz)
+        it._mesh = md  # <- zapisz md w itemie
 
         if self.shader is not None:
             it.setShader(self.shader)
@@ -96,31 +96,66 @@ class LODSurface:
         return it
 
     def _apply_style(self, it, step):
-        # tryb
+        # tryb rysowania
         if self.mode == 'wireframe':
             it.opts['drawFaces'] = False
             it.opts['drawEdges'] = True
+            it.opts['edgeColor'] = self.color
         else:
             it.opts['drawFaces'] = True
             it.opts['drawEdges'] = False
 
-        # kolory
+        # dostęp do MeshData (kompatybilnie wstecz)
         md = getattr(it, '_mesh', None)
         if md is None:
-            # fallback na wszelki wypadek, gdyby item nie był utworzony przez LODSurface
             try:
-                md = it.meshData()  # w niektórych wersjach istnieje
+                md = it.meshData()  # może istnieć w Twojej wersji
             except Exception:
-                return  # brak dostępu do MeshData – nic nie zrobimy bez przebudowy
+                return  # bez MeshData nie pokolorujemy
 
-        V = md.vertexes(indexed=False)
-        # ... wylicz C ...
+        # wierzchołki i wysokości
+        V = md.vertexes()                  # stare API: bez argumentów
+        z = V[:, 2].astype(np.float32, copy=False)
+        finite = np.isfinite(z)
+
+        # kolory: kolormap None => stały kolor; w przeciwnym razie mapowanie po z
+        if self.colormap is None:
+            C = np.tile(np.asarray(self.color, dtype=np.float32), (V.shape[0], 1))
+        else:
+            # lo/hi: z GUI lub auto z danych (ignoruj NaNy)
+            if self.lohi is not None and all(np.isfinite(self.lohi)):
+                lo, hi = self.lohi
+            elif finite.any():
+                lo = float(np.nanmin(z[finite]))
+                hi = float(np.nanmax(z[finite]))
+                if not np.isfinite(hi - lo) or hi <= lo:
+                    hi = lo + 1e-6
+            else:
+                lo, hi = 0.0, 1.0  # fallback gdy same NaNy
+
+            t = np.zeros_like(z, dtype=np.float32)
+            if finite.any():
+                t[finite] = np.clip((z[finite] - lo) / (hi - lo + 1e-12), 0.0, 1.0)
+
+            if self.colormap in ('RG', 'B&W'):
+                if self.colormap == 'RG':
+                    C = np.stack([1.0 - t, t, np.zeros_like(t), np.ones_like(t)], axis=1)
+                else:  # B&W
+                    C = np.stack([t, t, t, np.ones_like(t)], axis=1)
+            else:
+                # kolormapy z pyqtgraph
+                cmap = pg.colormap.get(self.colormap)
+                C = cmap.map(t, mode='float').astype(np.float32)
+
+            # przezroczyste wierzchołki dla NaN
+            if (~finite).any():
+                C[~finite, 3] = 0.0
+
+        # push kolorów do GPU (często samo setVertexColors nie wystarcza)
+        C = np.ascontiguousarray(C, dtype=np.float32)
         md.setVertexColors(C)
-
-        # W części wersji pyqtgraph samo setVertexColors nie odświeża buforów — wymuś aktualizację:
         it.setMeshData(meshdata=md)
-        # lub przynajmniej:
-        # it.update()
+        it.update()
 
     def _pick_step(self):
         # prosty heurystyczny wybór kroku na podstawie kamery
