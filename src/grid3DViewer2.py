@@ -8,9 +8,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 from .limitedGLView import LimitedGLView
+from .lodSurface import LODSurface
 
 class Grid3DViewer(QtWidgets.QWidget):
-    def __init__(self, surface_mode='shaded', parent=None):
+    def __init__(self, surface_mode='surface', parent=None):
         """Initializes the 3D grid viewer widget.
 
         Sets up the user interface, control checkboxes, and 3D view for displaying grid data.
@@ -60,8 +61,33 @@ class Grid3DViewer(QtWidgets.QWidget):
         self._ref_last = None
         self._adj_last = None
 
+        # --- LOD settings ---
+        self.use_lod = True
+        self.lod_steps = (1, 2, 4, 8, 16, 32)  # można skrócić
+        self.lod_ref = None
+        self.lod_adj = None
+
+        # timer do auto-przełączania LOD
+        self._lod_timer = QtCore.QTimer(self)
+        self._lod_timer.timeout.connect(self._update_lod_tick)
+        self._lod_timer.start(33)  # ~30 FPS
+
+        self._lod = {'ref': None, 'adj': None}
+
+
         self._setup_shortcuts()
 
+    def _ensure_lod(self, which, steps=(1,2,4,8,16)):
+        key = 'ref' if which == 'ref' else 'adj'
+        if self._lod[key] is None:
+            # możesz podać swój shader „headlight+two-sided” jeśli chcesz:
+            shader = None  # albo: shader = self._make_headlight_shader()
+            self._lod[key] = LODSurface(self.view, steps=steps, shader=shader)
+        return self._lod[key]
+
+    def _update_lod_tick(self):
+        if self.lod_ref: self.lod_ref.update_visible()
+        if self.lod_adj: self.lod_adj.update_visible()
 
     def create_a_tools(self):
         self.a_tools = QtWidgets.QWidget(self)
@@ -343,15 +369,19 @@ class Grid3DViewer(QtWidgets.QWidget):
 
 
     def remove_existing_items(self):
-        """Removes all existing items from the 3D view.
-
-        Clears reference and adjusted surfaces, profile lines, and cross-section planes from the viewer.
-        """
+        # stare pojedyncze itemy
         for item in [self.surface_ref_item, self.surface_adj_item,
-                     self.ref_profile_line_item, self.adj_profile_line_item,
-                     self.cross_plane_item]:
-            if item:
-                self.view.removeItem(item)
+                    self.ref_profile_line_item, self.adj_profile_line_item,
+                    self.cross_plane_item]:
+            if item and not isinstance(item, LODSurface):
+                try: self.view.removeItem(item)
+                except Exception: pass
+
+        # LOD-y
+        for key in ('ref','adj'):
+            if self._lod.get(key):
+                self._lod[key].destroy()
+                self._lod[key] = None
 
         self.surface_ref_item = None
         self.surface_adj_item = None
@@ -624,13 +654,38 @@ class Grid3DViewer(QtWidgets.QWidget):
             self.range_adj = (self.spin_lo_adj.value(), self.spin_hi_adj.value())
         self._refresh_surfaces()
 
+    # def _place_surface(self, item_attr, xs, ys, Z, mode, color, colormap, test="std"):
+    #     logger.debug(f"_place_surface({test}) - start")
+    #     # logger.debug(f"reference_grid.shape: {reference_grid.shape}")
+    #     if Z.shape != (len(ys), len(xs)) or np.all(np.isnan(Z)):
+    #         return
+
+    #     if mode == 'mesh':
+    #         old = getattr(self, item_attr, None)
+    #         if old is not None:
+    #             try: self.view.removeItem(old)
+    #             except Exception: pass
+    #         item = (self.make_voxel_mesh(Z, xs=xs, ys=ys, color=color)
+    #                 if colormap is None
+    #                 else self.make_voxel_mesh(Z, xs=xs, ys=ys, colormap=colormap))
+    #         setattr(self, item_attr, item)
+    #         self.view.addItem(item)
+    #     else:
+    #         item = self._upsert_gl_surface(item_attr, xs, ys, Z)
+    #         which = 'ref' if item_attr == 'surface_ref_item' else 'adj'
+    #         self._style_gl_surface(item, Z, mode, color, colormap, which)
+    #     logger.debug("_place_surface() - end")
+
+
     def _place_surface(self, item_attr, xs, ys, Z, mode, color, colormap, test="std"):
         logger.debug(f"_place_surface({test}) - start")
-        # logger.debug(f"reference_grid.shape: {reference_grid.shape}")
         if Z.shape != (len(ys), len(xs)) or np.all(np.isnan(Z)):
             return
 
+        which = 'ref' if item_attr == 'surface_ref_item' else 'adj'
+
         if mode == 'mesh':
+            # (dotychczasowy kod „mesh” zostaw bez zmian)
             old = getattr(self, item_attr, None)
             if old is not None:
                 try: self.view.removeItem(old)
@@ -639,13 +694,23 @@ class Grid3DViewer(QtWidgets.QWidget):
                     if colormap is None
                     else self.make_voxel_mesh(Z, xs=xs, ys=ys, colormap=colormap))
             setattr(self, item_attr, item)
-            self.view.addItem(item)
+            if item is not None:
+                self.view.addItem(item)
+            # ukryj ewentualny LOD dla tego kanału
+            lod = self._lod.get(which)
+            if lod: lod.set_visible(False)
         else:
-            item = self._upsert_gl_surface(item_attr, xs, ys, Z)
-            which = 'ref' if item_attr == 'surface_ref_item' else 'adj'
-            self._style_gl_surface(item, Z, mode, color, colormap, which)
-        logger.debug("_place_surface() - end")
+            # LOD dla surface/wireframe
+            lod = self._ensure_lod(which)
+            lod.set_visible(True)
+            lod.set_data(xs, ys, Z)
+            lo, hi = self._get_lo_hi_for(which, Z)
+            lod.update_style(mode=mode, colormap=colormap, base_color=color, lo=lo, hi=hi)
 
+            # dla kompatybilności: „w tym atrybucie” trzymaj wskaźnik na menedżer
+            setattr(self, item_attr, lod)
+
+        logger.debug("_place_surface() - end")
 
 
     # --- public wrappers -------------------------------------------------------
@@ -683,19 +748,40 @@ class Grid3DViewer(QtWidgets.QWidget):
         QtWidgets.QShortcut(QtGui.QKeySequence("2"), self, activated=lambda: self.combo_mode_r.setCurrentIndex(self.combo_mode_r.findData('surface')))
         QtWidgets.QShortcut(QtGui.QKeySequence("3"), self, activated=lambda: self.combo_mode_r.setCurrentIndex(self.combo_mode_r.findData('mesh')))
 
+    # def _refresh_surfaces(self):
+    #     self._begin_redraw()
+    #     try:
+    #         if self._ref_last is not None:
+    #             xs, ys, Z = self._ref_last
+    #             self._place_surface('surface_ref_item', xs, ys, Z,
+    #                                 self.ref_surface_mode, (0,1,0,1), self.colormap_ref, test="refresh_ref")
+    #         if self._adj_last is not None and not np.all(np.isnan(self._adj_last[2])):
+    #             xs, ys, Z = self._adj_last
+    #             self._place_surface('surface_adj_item', xs, ys, Z,
+    #                                 self.adj_surface_mode, (0.2,0.3,1,1), self.colormap_adj, test="refresh_adj")
+    #     finally:
+    #         self._await_next_frame_then_end()
+
     def _refresh_surfaces(self):
         self._begin_redraw()
         try:
             if self._ref_last is not None:
                 xs, ys, Z = self._ref_last
-                self._place_surface('surface_ref_item', xs, ys, Z,
-                                    self.ref_surface_mode, (0,1,0,1), self.colormap_ref, test="refresh_ref")
+                lo, hi = self._get_lo_hi_for('ref', Z)
+                lod = self._ensure_lod('ref')
+                lod.set_data(xs, ys, Z)
+                lod.update_style(self.ref_surface_mode, self.colormap_ref, (0,1,0,1), lo, hi)
+                lod.set_visible(True)
             if self._adj_last is not None and not np.all(np.isnan(self._adj_last[2])):
                 xs, ys, Z = self._adj_last
-                self._place_surface('surface_adj_item', xs, ys, Z,
-                                    self.adj_surface_mode, (0.2,0.3,1,1), self.colormap_adj, test="refresh_adj")
+                lo, hi = self._get_lo_hi_for('adj', Z)
+                lod = self._ensure_lod('adj')
+                lod.set_data(xs, ys, Z)
+                lod.update_style(self.adj_surface_mode, self.colormap_adj, (0.2,0.3,1,1), lo, hi)
+                lod.set_visible(True)
         finally:
             self._await_next_frame_then_end()
+
 
     # def _ui_mode_changed(self, _idx):
     #     mode = self.combo_mode_r.currentData()
@@ -1034,13 +1120,28 @@ class Grid3DViewer(QtWidgets.QWidget):
         self.view.addItem(mesh)
         return mesh
 
+    # def toggle_surface_ref(self, state):
+    #     if self.surface_ref_item:
+    #         self.surface_ref_item.setVisible(bool(state))
+
+    # def toggle_surface_adj(self, state):
+    #     if self.surface_adj_item:
+    #         self.surface_adj_item.setVisible(bool(state))
+
     def toggle_surface_ref(self, state):
-        if self.surface_ref_item:
-            self.surface_ref_item.setVisible(bool(state))
+        obj = self.surface_ref_item
+        if isinstance(obj, LODSurface):
+            obj.set_visible(bool(state))
+        elif obj:
+            obj.setVisible(bool(state))
 
     def toggle_surface_adj(self, state):
-        if self.surface_adj_item:
-            self.surface_adj_item.setVisible(bool(state))
+        obj = self.surface_adj_item
+        if isinstance(obj, LODSurface):
+            obj.set_visible(bool(state))
+        elif obj:
+            obj.setVisible(bool(state))
+
 
     def toggle_profile_line(self, state):
         if self.ref_profile_line_item:
