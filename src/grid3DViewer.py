@@ -372,18 +372,22 @@ class Grid3DViewer(QtWidgets.QWidget):
         """
         self.remove_existing_items()
 
-        #xs, ys, Z_ref, xs_idx, ys_idx = self._prepare_reference_surface(reference_grid)
-        xs, ys, Z_ref = self._prepare_reference_surface(reference_grid)
+        xs, ys, Z_ref, xs_idx, ys_idx = self._prepare_reference_surface(reference_grid)
+        #xs, ys, Z_ref = self._prepare_reference_surface(reference_grid)
         if adjusted_grid is not None:
-            Z_adj = self._prepare_adjusted_surface(adjusted_grid, ys, xs, separation, Z_ref)
+            Z_adj = self._prepare_adjusted_surface(adjusted_grid, ys_idx, xs_idx, separation, Z_ref)
         else:
             Z_adj = None
+
+        logger.debug("PUNKT KONTROLNY NR 1")
 
         # tuż po wyznaczeniu xs, ys, Z_ref i Z_adj:
         self._ref_last = (xs, ys, Z_ref)
         
         if adjusted_grid is not None:
             self._adj_last = (xs, ys, Z_adj)
+
+        logger.debug("PUNKT KONTROLNY NR 2")
 
         # NEW: ustaw spinboksy wg auto obliczeń (nie nadpisuje manualnych wartości)
         if self.range_ref_auto and np.any(np.isfinite(Z_ref)):
@@ -396,9 +400,13 @@ class Grid3DViewer(QtWidgets.QWidget):
                 self._update_range_widgets('adj', lo, hi, auto=True)
 
         self._add_reference_surface(xs, ys, Z_ref, colormap=self.colormap_ref)
-        
+
+        logger.debug("PUNKT KONTROLNY NR 3")
+
         if adjusted_grid is not None:
             self._add_adjusted_surface(xs, ys, Z_adj,  colormap=self.colormap_adj)
+
+        logger.debug("PUNKT KONTROLNY NR 4")
 
         if not np.any(np.isfinite(Z_ref)) and not np.any(np.isfinite(Z_adj)):
             return  # nothing to display safely
@@ -412,54 +420,54 @@ class Grid3DViewer(QtWidgets.QWidget):
 
         self._center_camera(xs, ys, Z_ref, Z_adj, line_points)
 
-    def _prepare_reference_surface(self, reference_grid):
-        """Prepares the reference surface for 3D visualization.
+    # def _prepare_reference_surface(self, reference_grid):
+    #     """Prepares the reference surface for 3D visualization.
 
-        Downsamples the reference grid, replaces invalid values with NaN, and returns the axes and processed grid.
+    #     Downsamples the reference grid, replaces invalid values with NaN, and returns the axes and processed grid.
 
-        Args:
-            reference_grid (np.ndarray): The reference grid data.
+    #     Args:
+    #         reference_grid (np.ndarray): The reference grid data.
 
-        Returns:
-            tuple: (xs, ys, Z_ref) where xs and ys are axis arrays and Z_ref is the processed grid.
-        """
-        max_points = 256
-        step = 1 # max(1, min(reference_grid.shape[0], reference_grid.shape[1]) // max_points)
-        ys = np.arange(0, reference_grid.shape[0], step)
-        xs = np.arange(0, reference_grid.shape[1], step)
-        Z_ref = reference_grid[np.ix_(ys, xs)]
-        Z_ref = np.where(np.isfinite(Z_ref), Z_ref, np.nan)
-        Z_ref = np.where((Z_ref > 1e6) | (Z_ref < -1e6), np.nan, Z_ref)
-        return xs, ys, Z_ref
+    #     Returns:
+    #         tuple: (xs, ys, Z_ref) where xs and ys are axis arrays and Z_ref is the processed grid.
+    #     """
+    #     max_points = 256
+    #     step = 1 # max(1, min(reference_grid.shape[0], reference_grid.shape[1]) // max_points)
+    #     ys = np.arange(0, reference_grid.shape[0], step)
+    #     xs = np.arange(0, reference_grid.shape[1], step)
+    #     Z_ref = reference_grid[np.ix_(ys, xs)]
+    #     Z_ref = np.where(np.isfinite(Z_ref), Z_ref, np.nan)
+    #     Z_ref = np.where((Z_ref > 1e6) | (Z_ref < -1e6), np.nan, Z_ref)
+    #     return xs, ys, Z_ref
 
-    # def _prepare_reference_surface(self, reference_grid,
-    #                             max_points=256, clip_abs=1e6,
-    #                             dx=1.0, dy=1.0, x0=0.0, y0=0.0):
-    #     logger.debug("_prepare_reference_surface() - start")
-    #     logger.debug(f"reference_grid.shape: {reference_grid.shape}")
+    def _prepare_reference_surface(self, reference_grid,
+                                max_points=256, clip_abs=1e6,
+                                dx=1.0, dy=1.0, x0=0.0, y0=0.0):
+        logger.debug("_prepare_reference_surface() - start")
+        logger.debug(f"reference_grid.shape: {reference_grid.shape}")
 
-    #     h0, w0 = reference_grid.shape
-    #     step = max(1, min(h0, w0) // max_points)
+        h0, w0 = reference_grid.shape
+        step = max(1, min(h0, w0) // max_points)
 
-    #     # indeksy (INT) do downsamplingu
-    #     ys_idx = np.arange(0, h0, step, dtype=np.int32)
-    #     xs_idx = np.arange(0, w0, step, dtype=np.int32)
+        # indeksy (INT) do downsamplingu
+        ys_idx = np.arange(0, h0, step, dtype=np.int32)
+        xs_idx = np.arange(0, w0, step, dtype=np.int32)
 
-    #     # siatka w docelowej rozdzielczości
-    #     Z = reference_grid[np.ix_(ys_idx, xs_idx)].astype(np.float32, copy=True)
+        # siatka w docelowej rozdzielczości
+        Z = reference_grid[np.ix_(ys_idx, xs_idx)].astype(np.float32, copy=True)
 
-    #     # maskowanie NaN / outliers (jedna maska = szybciej)
-    #     mask = ~np.isfinite(Z) | (np.abs(Z) > clip_abs)
-    #     if mask.any():
-    #         Z[mask] = np.nan
+        # maskowanie NaN / outliers (jedna maska = szybciej)
+        mask = ~np.isfinite(Z) | (np.abs(Z) > clip_abs)
+        if mask.any():
+            Z[mask] = np.nan
 
-    #     # osie w jednostkach (FLOAT) – do GLSurfacePlotItem (opcjonalnie)
-    #     xs = x0 + dx * xs_idx.astype(np.float32)
-    #     ys = y0 + dy * ys_idx.astype(np.float32)
+        # osie w jednostkach (FLOAT) – do GLSurfacePlotItem (opcjonalnie)
+        xs = x0 + dx * xs_idx.astype(np.float32)
+        ys = y0 + dy * ys_idx.astype(np.float32)
 
-    #     logger.debug("_prepare_reference_surface() - end")
-    #     # ZWRACAMY TAKŻE INDEKSY, bo _prepare_adjusted_surface ich potrzebuje
-    #     return xs, ys, Z, xs_idx, ys_idx
+        logger.debug("_prepare_reference_surface() - end")
+        # ZWRACAMY TAKŻE INDEKSY, bo _prepare_adjusted_surface ich potrzebuje
+        return xs, ys, Z, xs_idx, ys_idx
 
     def _prepare_adjusted_surface(self, adjusted_grid, ys_idx, xs_idx, separation, Z_ref, clip_abs=1e6):
         """Zwraca Z_adj o tym samym kształcie co Z_ref."""

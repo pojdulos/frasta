@@ -14,7 +14,7 @@ from .aboutDialog import AboutDialog
 from .scanTab import ScanTab
 from .gridData import GridData
 
-from .grid3DViewer import show_3d_viewer
+from .grid3DViewer2 import show_3d_viewer
 
 import logging
 logger = logging.getLogger(__name__)

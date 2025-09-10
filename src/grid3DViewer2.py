@@ -474,7 +474,7 @@ class Grid3DViewer(QtWidgets.QWidget):
     #     return xs, ys, Z_ref
 
     def _prepare_reference_surface(self, reference_grid,
-                                max_points=1024, clip_abs=1e6,
+                                max_points=512, clip_abs=1e6,
                                 dx=1.0, dy=1.0, x0=0.0, y0=0.0):
         logger.debug("_prepare_reference_surface() - start")
         logger.debug(f"reference_grid.shape: {reference_grid.shape}")
