@@ -179,6 +179,51 @@ class LODSurface:
         C = np.ascontiguousarray(C, dtype=np.float32)
         md.setVertexColors(C)
         it.setMeshData(meshdata=md)
+
+        from pyqtgraph.opengl import shaders
+
+        prog = shaders.ShaderProgram(
+            'headlight_color',
+            [
+                shaders.VertexShader("""
+                    // Wersja "legacy": używa gl_* i działa w starszych pyqtgraph
+                    varying vec3 vN;
+                    varying vec4 vColor;
+                    void main() {
+                        gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
+                        vN     = normalize(gl_NormalMatrix * gl_Normal); // normal w przestrzeni oka
+                        vColor = gl_Color;                               // z colors=... albo setColor(...)
+                    }
+                """),
+                shaders.FragmentShader("""
+                    varying vec3 vN;
+                    varying vec4 vColor;
+                    void main() {
+                        // "Headlight" - światło przyspawane do widza (w przestrzeni oka)
+                        vec3 L = normalize(vec3(0.0, 0.0, 1.0));
+
+                        // Dwustronne: odwróć normalną dla tylnej ściany
+                        vec3 N = normalize(vN);
+                        if (!gl_FrontFacing) N = -N;
+
+                        // Diffuse + lekki ambient
+                        float diff = max(dot(N, L), 0.0);
+                        vec3 base = vColor.rgb;
+                        vec3 rgb  = base * (0.15 + 0.85*diff);
+
+                        // (opcjonalnie lekki połysk)
+                        // vec3 R = reflect(-L, N);
+                        // vec3 V = vec3(0.0, 0.0, 1.0);
+                        // float spec = pow(max(dot(R, V), 0.0), 16.0);
+                        // rgb += 0.12 * spec;
+
+                        gl_FragColor = vec4(rgb, vColor.a);
+                    }
+                """)
+            ]
+        )
+
+        it.setShader(prog)
         it.update()
 
     def _pick_step(self):
