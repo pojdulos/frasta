@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 from PyQt5 import QtWidgets
 from src.frasta_gui import MainWindow
-
+import types
+import sys
 # --- Pomocnicze klasy ---
 class DummyTab(QtWidgets.QWidget):
     def __init__(self, grid=None):
@@ -28,7 +29,41 @@ class DummyROI:
             def y(self): return self._y
         return P(self._x, self._y)
     def size(self): return (self._w, self._h)
-    
+
+class DummyView:
+    def __init__(self):
+        self.items = []
+    def addItem(self, item): 
+        if item not in self.items: self.items.append(item)
+    def removeItem(self, item): 
+        if item in self.items: self.items.remove(item)
+    def allChildren(self): 
+        return list(self.items)
+
+class DummyImageView:
+    def __init__(self, view): self._v = view
+    def getView(self): return self._v
+
+class DummyScanTab(QtWidgets.QWidget):
+    def __init__(self, grid_shape=(100,100)):
+        super().__init__()
+        self.grid = np.ones(grid_shape)
+        self.image_view = DummyImageView(DummyView())
+
+class DummyROIBase:
+    def __init__(self, pos, size, **kw):
+        self._visible = True
+        self._pos = pos
+        self._size = size
+        self._z = 0
+    def isVisible(self): return self._visible
+    def setVisible(self, v): self._visible = v
+    def show(self): self._visible = True
+    def setZValue(self, z): self._z = z
+    def pos(self):
+        return types.SimpleNamespace(x=lambda: self._pos[0], y=lambda: self._pos[1])
+    def size(self): return self._size
+
 # --- Fixture ---
 @pytest.fixture
 def mainwindow(qapp):
@@ -36,6 +71,66 @@ def mainwindow(qapp):
     yield win
     win.close()
     QtWidgets.QApplication.processEvents()
+
+def test_show_circle_roi_creates_and_toggles(monkeypatch, mainwindow):
+    # wstaw dwie zakładki żeby można było przenosić ROI
+    t1, t2 = DummyScanTab(), DummyScanTab()
+    mainwindow.tabs.addTab(t1, "t1")
+    mainwindow.tabs.addTab(t2, "t2")
+    mainwindow.tabs.setCurrentIndex(0)
+
+    # podmień pyqtgraph ROI na stub
+    class DummyCircle(DummyROIBase): pass
+    monkeypatch.setitem(sys.modules, 'pyqtgraph', types.SimpleNamespace(
+        CircleROI=DummyCircle, RectROI=None, mkPen=lambda *a, **k: None
+    ))
+
+    # pierwszy toggle -> ROI utworzone i widoczne
+    mainwindow.show_circle_roi()
+    assert mainwindow.shared_circle_roi is not None
+    assert mainwindow.shared_circle_roi.isVisible()
+    assert mainwindow.shared_circle_roi in t1.image_view.getView().allChildren()
+
+    # drugi toggle -> ukrycie
+    mainwindow.show_circle_roi()
+    assert mainwindow.shared_circle_roi.isVisible() is False
+
+def test_show_rectangle_hides_circle(monkeypatch, mainwindow):
+    t = DummyScanTab()
+    mainwindow.tabs.addTab(t, "t")
+    mainwindow.tabs.setCurrentIndex(0)
+
+    class DummyCircle(DummyROIBase): pass
+    class DummyRect(DummyROIBase): pass
+    monkeypatch.setitem(sys.modules, 'pyqtgraph', types.SimpleNamespace(
+        CircleROI=DummyCircle, RectROI=DummyRect, mkPen=lambda *a, **k: None
+    ))
+
+    mainwindow.show_circle_roi()          # koło widoczne
+    assert mainwindow.shared_circle_roi.isVisible()
+    mainwindow.show_rectangle_roi()       # prostokąt pokazany, koło ukryte
+    assert mainwindow.shared_rectangle_roi.isVisible()
+    assert mainwindow.shared_circle_roi.isVisible() is False
+
+def test_move_roi_to_current_tab(monkeypatch, mainwindow):
+    t1, t2 = DummyScanTab(), DummyScanTab()
+    mainwindow.tabs.addTab(t1, "t1")
+    mainwindow.tabs.addTab(t2, "t2")
+
+    class DummyRect(DummyROIBase): pass
+    monkeypatch.setitem(sys.modules, 'pyqtgraph', types.SimpleNamespace(
+        RectROI=DummyRect, CircleROI=None, mkPen=lambda *a, **k: None
+    ))
+    # pokaż prostokąt na t1
+    mainwindow.tabs.setCurrentIndex(0)
+    mainwindow.show_rectangle_roi()
+    assert mainwindow.shared_rectangle_roi in t1.image_view.getView().allChildren()
+
+    # przełącz na t2 -> ROI powinno zostać przeniesione
+    mainwindow.move_roi_to_current_tab(1)
+    assert mainwindow.shared_rectangle_roi in t2.image_view.getView().allChildren()
+    assert mainwindow.shared_rectangle_roi not in t1.image_view.getView().allChildren()
+
 
 # --- Testy maskowania ---
 def test_create_circle_mask(mainwindow):
@@ -228,3 +323,46 @@ def test_del_inside_outside_mask(mainwindow):
     mainwindow.shared_rectangle_roi = None
     mainwindow.del_inside_mask()
     mainwindow.del_outside_mask()
+
+def test_create_mask_none_when_no_roi(mainwindow):
+    mainwindow.shared_circle_roi = None
+    mainwindow.shared_rectangle_roi = None
+    assert mainwindow.create_mask(10, 20) is None
+
+def test_circle_mask_float_center(monkeypatch, mainwindow):
+    class R(DummyROIBase): pass
+    r = R(pos=(4.3, 5.7), size=(6.0, 6.0))
+    r.setVisible(True)
+    mainwindow.shared_circle_roi = r
+    mainwindow.shared_rectangle_roi = None
+    m = mainwindow.create_mask(12, 12)
+    assert m.shape == (12, 12)
+    assert m.any()
+
+def test_recent_files_de_dupe_and_order(mainwindow, tmp_path):
+    f1 = str(tmp_path / "a.csv")
+    f2 = str(tmp_path / "b.csv")
+    for p in (f1, f2): open(p, "w").close()
+    mainwindow.add_to_recent_files(f1)
+    mainwindow.add_to_recent_files(f2)
+    mainwindow.add_to_recent_files(f1)  # f1 na początek
+    assert mainwindow.recent_files[:2] == [f1, f2]
+
+def test_create_tab_and_load_csv(monkeypatch, mainwindow, tmp_path):
+    f = str(tmp_path / "d.csv"); open(f, "w").close()
+    called = {}
+    monkeypatch.setattr('src.frasta_gui.MainWindow.load_csv', lambda self, fname, tab: called.setdefault('f', fname))
+    mainwindow.create_tab_and_load(f)
+    assert called.get('f') == f
+    assert mainwindow.recent_files[0] == f
+
+def test_resource_path_meipass(monkeypatch):
+    import src.frasta_gui as fg
+    monkeypatch.setattr(fg.sys, "_MEIPASS", "/tmp/meipass", raising=False)
+    p = fg.resource_path("icons/x.png")
+    assert p.endswith("icons/x.png") and "/tmp/meipass" in p
+
+def test_actions_wired(mainwindow):
+    for key in ["open","save_scan","save_multi","fill","repair","flipUD","flipLR","rot90","inverse","zero","tilt","colormap","view3d","compare","profile","about","exit"]:
+        assert key in mainwindow.actions
+        assert isinstance(mainwindow.actions[key], QtWidgets.QAction)
