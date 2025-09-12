@@ -9,7 +9,7 @@ def viewer():
 def test_prepare_reference_surface_downsampling_and_nan(viewer):
     grid = np.arange(100).reshape(10, 10).astype(float)
     grid[0, 0] = np.nan
-    xs, ys, Z_ref = viewer._prepare_reference_surface(grid)
+    xs, ys, Z_ref, xs_idx, ys_idx = viewer._prepare_reference_surface(grid)
     assert Z_ref.shape[0] == len(ys)
     assert Z_ref.shape[1] == len(xs)
     assert np.isnan(Z_ref[0, 0])
