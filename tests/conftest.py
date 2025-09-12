@@ -3,7 +3,7 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 from unittest.mock import patch
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="function", autouse=True)
 def qapp():
     app = QApplication.instance()
     if app is None:
@@ -17,3 +17,4 @@ def mock_qmessagebox():
          patch("PyQt5.QtWidgets.QMessageBox.information") as mock_info, \
          patch("PyQt5.QtWidgets.QMessageBox.question", return_value=0) as mock_question:
         yield
+
