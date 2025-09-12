@@ -6,6 +6,7 @@ class AboutDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("About")
         self.setMinimumWidth(350)
+        self.setModal(True)
 
         layout = QtWidgets.QVBoxLayout(self)
 

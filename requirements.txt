@@ -5,7 +5,9 @@ PyOpenGL
 PyOpenGL-accelerate
 PyQt5
 pyqtgraph
-pytest
 scikit-image
 scikit-learn
 trimesh
+coverage
+pytest
+pytest-cov
