@@ -473,9 +473,45 @@ class Grid3DViewer(QtWidgets.QWidget):
     #     Z_ref = np.where((Z_ref > 1e6) | (Z_ref < -1e6), np.nan, Z_ref)
     #     return xs, ys, Z_ref
 
+
     def _prepare_reference_surface(self, reference_grid,
                                 max_points=512, clip_abs=1e6,
                                 dx=1.0, dy=1.0, x0=0.0, y0=0.0):
+        """
+        Prepares a downsampled reference surface from a 2D grid for visualization or further processing.
+        Parameters
+        ----------
+        reference_grid : np.ndarray
+            2D array representing the reference surface grid.
+        max_points : int, optional
+            Maximum number of points along each axis after downsampling (default is 512).
+        clip_abs : float, optional
+            Absolute value threshold for outlier clipping; values above this are set to NaN (default is 1e6).
+        dx : float, optional
+            Step size along the x-axis in physical units (default is 1.0).
+        dy : float, optional
+            Step size along the y-axis in physical units (default is 1.0).
+        x0 : float, optional
+            Origin offset along the x-axis (default is 0.0).
+        y0 : float, optional
+            Origin offset along the y-axis (default is 0.0).
+        Returns
+        -------
+        xs : np.ndarray
+            1D array of x-axis coordinates in physical units.
+        ys : np.ndarray
+            1D array of y-axis coordinates in physical units.
+        Z : np.ndarray
+            2D array of downsampled and masked surface values.
+        xs_idx : np.ndarray
+            1D array of selected x indices used for downsampling.
+        ys_idx : np.ndarray
+            1D array of selected y indices used for downsampling.
+        Notes
+        -----
+        - NaN and outlier values in the downsampled grid are masked and set to NaN.
+        - The returned indices can be used for further processing or alignment with other grids.
+        """
         logger.debug("_prepare_reference_surface() - start")
         logger.debug(f"reference_grid.shape: {reference_grid.shape}")
 
@@ -514,114 +550,114 @@ class Grid3DViewer(QtWidgets.QWidget):
         return Z_adj
 
 
-    def _upsert_gl_surface(self, item_attr, xs, ys, Z):
-        """Ensure GLSurfacePlotItem exists and has updated geometry."""
-        item = getattr(self, item_attr, None)
-        if item is None or not isinstance(item, gl.GLSurfacePlotItem):
-            # usuń poprzedni obiekt (np. z trybu 'mesh'), jeśli był
-            if item is not None:
-                try: self.view.removeItem(item)
-                except Exception: pass
-            item = gl.GLSurfacePlotItem(x=xs, y=ys, z=Z.T)
-            setattr(self, item_attr, item)
-            self.view.addItem(item)
-        else:
-            item.setData(x=xs, y=ys, z=Z.T)
-        return item
+    # def _upsert_gl_surface(self, item_attr, xs, ys, Z):
+    #     """Ensure GLSurfacePlotItem exists and has updated geometry."""
+    #     item = getattr(self, item_attr, None)
+    #     if item is None or not isinstance(item, gl.GLSurfacePlotItem):
+    #         # usuń poprzedni obiekt (np. z trybu 'mesh'), jeśli był
+    #         if item is not None:
+    #             try: self.view.removeItem(item)
+    #             except Exception: pass
+    #         item = gl.GLSurfacePlotItem(x=xs, y=ys, z=Z.T)
+    #         setattr(self, item_attr, item)
+    #         self.view.addItem(item)
+    #     else:
+    #         item.setData(x=xs, y=ys, z=Z.T)
+    #     return item
 
     
-    def _style_gl_surface(self, item:gl.GLSurfacePlotItem, Z, mode, color, colormap, which):
-        """Apply rendering mode and colors to an existing GLSurfacePlotItem."""
-        if mode == 'wireframe':
-            item.setShader(None)
-            item.opts['drawFaces'] = False
-            item.opts['drawEdges'] = True
-            item.opts['edgeColor'] = color
-            item.setGLOptions('opaque')
-            item.update()
-            return
+    # def _style_gl_surface(self, item:gl.GLSurfacePlotItem, Z, mode, color, colormap, which):
+    #     """Apply rendering mode and colors to an existing GLSurfacePlotItem."""
+    #     if mode == 'wireframe':
+    #         item.setShader(None)
+    #         item.opts['drawFaces'] = False
+    #         item.opts['drawEdges'] = True
+    #         item.opts['edgeColor'] = color
+    #         item.setGLOptions('opaque')
+    #         item.update()
+    #         return
 
-        # faces mode
-        item.opts['drawFaces'] = True
-        item.opts['drawEdges'] = False
+    #     # faces mode
+    #     item.opts['drawFaces'] = True
+    #     item.opts['drawEdges'] = False
 
-        if colormap is None:
-            colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
-            colors[...] = color  # (r,g,b,a)
-            #item.opts['color'] = color
-            item.setColor(color)
-        else:    
-            lo, hi = self._get_lo_hi_for(which, Z)
-            zprime = np.clip((Z - lo) / (hi - lo + 1e-12), 0.0, 1.0)
-            zT = zprime.T
+    #     if colormap is None:
+    #         colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
+    #         colors[...] = color  # (r,g,b,a)
+    #         #item.opts['color'] = color
+    #         item.setColor(color)
+    #     else:    
+    #         lo, hi = self._get_lo_hi_for(which, Z)
+    #         zprime = np.clip((Z - lo) / (hi - lo + 1e-12), 0.0, 1.0)
+    #         zT = zprime.T
 
-            if colormap == 'RG':
-                colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
-                colors[..., 0] = 1.0 - zT   # R
-                colors[..., 1] = zT         # G
-                colors[..., 2] = 0.0        # B
-                colors[..., 3] = 1.0        # A
-            elif colormap == 'B&W':
-                colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
-                colors[..., 0] = zT
-                colors[..., 1] = zT
-                colors[..., 2] = zT
-                colors[..., 3] = 1.0
-            else: # kolormapy z pyqtgraph
-                cm = pg.colormap.get(colormap)
-                colors = cm.map(zT, mode='float')
+    #         if colormap == 'RG':
+    #             colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
+    #             colors[..., 0] = 1.0 - zT   # R
+    #             colors[..., 1] = zT         # G
+    #             colors[..., 2] = 0.0        # B
+    #             colors[..., 3] = 1.0        # A
+    #         elif colormap == 'B&W':
+    #             colors = np.empty((Z.shape[1], Z.shape[0], 4), dtype=np.float32)
+    #             colors[..., 0] = zT
+    #             colors[..., 1] = zT
+    #             colors[..., 2] = zT
+    #             colors[..., 3] = 1.0
+    #         else: # kolormapy z pyqtgraph
+    #             cm = pg.colormap.get(colormap)
+    #             colors = cm.map(zT, mode='float')
 
-        colors = np.ascontiguousarray(colors, dtype=np.float32)
-        item.setData(colors=colors)
-        item.opts['computeNormals'] = True
-        item.setShader('shaded')
-        # item.setGLOptions('opaque')   # zmień na 'translucent' jeśli gdzieś ustawiasz A<1
+    #     colors = np.ascontiguousarray(colors, dtype=np.float32)
+    #     item.setData(colors=colors)
+    #     item.opts['computeNormals'] = True
+    #     item.setShader('shaded')
+    #     # item.setGLOptions('opaque')   # zmień na 'translucent' jeśli gdzieś ustawiasz A<1
 
-        from pyqtgraph.opengl import shaders
+    #     from pyqtgraph.opengl import shaders
 
-        prog = shaders.ShaderProgram(
-            'headlight_color',
-            [
-                shaders.VertexShader("""
-                    // Wersja "legacy": używa gl_* i działa w starszych pyqtgraph
-                    varying vec3 vN;
-                    varying vec4 vColor;
-                    void main() {
-                        gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
-                        vN     = normalize(gl_NormalMatrix * gl_Normal); // normal w przestrzeni oka
-                        vColor = gl_Color;                               // z colors=... albo setColor(...)
-                    }
-                """),
-                shaders.FragmentShader("""
-                    varying vec3 vN;
-                    varying vec4 vColor;
-                    void main() {
-                        // "Headlight" - światło przyspawane do widza (w przestrzeni oka)
-                        vec3 L = normalize(vec3(0.0, 0.0, 1.0));
+    #     prog = shaders.ShaderProgram(
+    #         'headlight_color',
+    #         [
+    #             shaders.VertexShader("""
+    #                 // Wersja "legacy": używa gl_* i działa w starszych pyqtgraph
+    #                 varying vec3 vN;
+    #                 varying vec4 vColor;
+    #                 void main() {
+    #                     gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
+    #                     vN     = normalize(gl_NormalMatrix * gl_Normal); // normal w przestrzeni oka
+    #                     vColor = gl_Color;                               // z colors=... albo setColor(...)
+    #                 }
+    #             """),
+    #             shaders.FragmentShader("""
+    #                 varying vec3 vN;
+    #                 varying vec4 vColor;
+    #                 void main() {
+    #                     // "Headlight" - światło przyspawane do widza (w przestrzeni oka)
+    #                     vec3 L = normalize(vec3(0.0, 0.0, 1.0));
 
-                        // Dwustronne: odwróć normalną dla tylnej ściany
-                        vec3 N = normalize(vN);
-                        if (!gl_FrontFacing) N = -N;
+    #                     // Dwustronne: odwróć normalną dla tylnej ściany
+    #                     vec3 N = normalize(vN);
+    #                     if (!gl_FrontFacing) N = -N;
 
-                        // Diffuse + lekki ambient
-                        float diff = max(dot(N, L), 0.0);
-                        vec3 base = vColor.rgb;
-                        vec3 rgb  = base * (0.15 + 0.85*diff);
+    #                     // Diffuse + lekki ambient
+    #                     float diff = max(dot(N, L), 0.0);
+    #                     vec3 base = vColor.rgb;
+    #                     vec3 rgb  = base * (0.15 + 0.85*diff);
 
-                        // (opcjonalnie lekki połysk)
-                        // vec3 R = reflect(-L, N);
-                        // vec3 V = vec3(0.0, 0.0, 1.0);
-                        // float spec = pow(max(dot(R, V), 0.0), 16.0);
-                        // rgb += 0.12 * spec;
+    #                     // (opcjonalnie lekki połysk)
+    #                     // vec3 R = reflect(-L, N);
+    #                     // vec3 V = vec3(0.0, 0.0, 1.0);
+    #                     // float spec = pow(max(dot(R, V), 0.0), 16.0);
+    #                     // rgb += 0.12 * spec;
 
-                        gl_FragColor = vec4(rgb, vColor.a);
-                    }
-                """)
-            ]
-        )
+    #                     gl_FragColor = vec4(rgb, vColor.a);
+    #                 }
+    #             """)
+    #         ]
+    #     )
 
-        item.setShader(prog)
-        item.update()
+    #     item.setShader(prog)
+    #     item.update()
 
     def _ui_link_toggled(self, on):
         self.range_linked = bool(on)
@@ -665,28 +701,6 @@ class Grid3DViewer(QtWidgets.QWidget):
         else:
             self.range_adj = (self.spin_lo_adj.value(), self.spin_hi_adj.value())
         self._refresh_surfaces()
-
-    # def _place_surface(self, item_attr, xs, ys, Z, mode, color, colormap, test="std"):
-    #     logger.debug(f"_place_surface({test}) - start")
-    #     # logger.debug(f"reference_grid.shape: {reference_grid.shape}")
-    #     if Z.shape != (len(ys), len(xs)) or np.all(np.isnan(Z)):
-    #         return
-
-    #     if mode == 'mesh':
-    #         old = getattr(self, item_attr, None)
-    #         if old is not None:
-    #             try: self.view.removeItem(old)
-    #             except Exception: pass
-    #         item = (self.make_voxel_mesh(Z, xs=xs, ys=ys, color=color)
-    #                 if colormap is None
-    #                 else self.make_voxel_mesh(Z, xs=xs, ys=ys, colormap=colormap))
-    #         setattr(self, item_attr, item)
-    #         self.view.addItem(item)
-    #     else:
-    #         item = self._upsert_gl_surface(item_attr, xs, ys, Z)
-    #         which = 'ref' if item_attr == 'surface_ref_item' else 'adj'
-    #         self._style_gl_surface(item, Z, mode, color, colormap, which)
-    #     logger.debug("_place_surface() - end")
 
 
     def _place_surface(self, item_attr, xs, ys, Z, mode, color, colormap, test="std"):
@@ -737,22 +751,22 @@ class Grid3DViewer(QtWidgets.QWidget):
         kolor = (0.2, 0.3, 1, 1)
         self._place_surface('surface_adj_item', xs, ys, Z, self.adj_surface_mode, kolor, colormap, test="add_adj")
 
-    def set_view_mode(self, mode, colormap=None):
-        # zakładam, że trzymasz ostatnią siatkę:
-        xs, ys, Z = self._ref_last  # np. ustawiane w _place_surface
+    # def set_view_mode(self, mode, colormap=None):
+    #     # zakładam, że trzymasz ostatnią siatkę:
+    #     xs, ys, Z = self._ref_last  # np. ustawiane w _place_surface
 
-        if mode == 'mesh':
-            self._place_surface('surface_ref_item', xs, ys, Z, 'mesh', (0,1,0,1), colormap)
-            return
+    #     if mode == 'mesh':
+    #         self._place_surface('surface_ref_item', xs, ys, Z, 'mesh', (0,1,0,1), colormap)
+    #         return
 
-        # upewnij się, że mamy GLSurfacePlotItem (tworzy jeśli brak)
-        item = self._upsert_gl_surface('surface_ref_item', xs, ys, Z)
+    #     # upewnij się, że mamy GLSurfacePlotItem (tworzy jeśli brak)
+    #     item = self._upsert_gl_surface('surface_ref_item', xs, ys, Z)
 
-        # przełącz w locie tryb i kolory (zero duplikacji geometrii)
-        if mode == 'wireframe':
-            self._style_gl_surface(item, Z, 'wireframe', (0,1,0,1), None)
-        else:  # 'surface' / cokolwiek nie-'wireframe'
-            self._style_gl_surface(item, Z, 'surface', (0,1,0,1), colormap)  # np. 'RG' albo 'viridis'
+    #     # przełącz w locie tryb i kolory (zero duplikacji geometrii)
+    #     if mode == 'wireframe':
+    #         self._style_gl_surface(item, Z, 'wireframe', (0,1,0,1), None)
+    #     else:  # 'surface' / cokolwiek nie-'wireframe'
+    #         self._style_gl_surface(item, Z, 'surface', (0,1,0,1), colormap)  # np. 'RG' albo 'viridis'
 
 
     def _setup_shortcuts(self):

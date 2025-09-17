@@ -15,27 +15,31 @@ class LimitedGLView(GLViewWidget):
         self.wrap_az = wrap_azimuth
 
     def orbit(self, azim, elev):
-        # NIE wołamy super().orbit(), bo ono klipuje elev do [-90, 90]
-        az = self.opts['azimuth']   + float(azim)
-        el = self.opts['elevation'] + float(elev)
+        if self.az_range and self.az_range[0] == self.az_range[1]:
+            # Zakres zerowy, nie ma sensu zmieniac azimuth
+            self.update()
+        else:
+            # NIE wołamy super().orbit(), bo ono klipuje elev do [-90, 90]
+            az = self.opts['azimuth']   + float(azim)
+            el = self.opts['elevation'] + float(elev)
 
-        # ograniczenia
-        if self.az_range is not None:
-            amin, amax = self.az_range
-            if self.wrap_az:
-                span = (amax - amin)
-                if span != 0:
-                    az = ((az - amin) % span) + amin
-            else:
-                az = max(amin, min(amax, az))
+            # ograniczenia
+            if self.az_range is not None:
+                amin, amax = self.az_range
+                if self.wrap_az:
+                    span = (amax - amin)
+                    if span != 0:
+                        az = ((az - amin) % span) + amin
+                else:
+                    az = max(amin, min(amax, az))
 
-        if self.el_range is not None:
-            emin, emax = self.el_range
-            el = max(emin, min(emax, el))
+            if self.el_range is not None:
+                emin, emax = self.el_range
+                el = max(emin, min(emax, el))
 
-        self.opts['azimuth'] = az
-        self.opts['elevation'] = el
-        self.update()
+            self.opts['azimuth'] = az
+            self.opts['elevation'] = el
+            self.update()
 
     # helper do ustawiania z kodu
     def setRotationRanges(self, azimuth_range=None, elevation_range=None, wrap_azimuth=None):

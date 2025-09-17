@@ -11,3 +11,4 @@ trimesh
 coverage
 pytest
 pytest-cov
+pytest-mock
